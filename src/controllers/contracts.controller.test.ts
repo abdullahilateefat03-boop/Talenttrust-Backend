@@ -1,15 +1,31 @@
 import { Request, Response, NextFunction } from 'express';
 import { ContractBoundsError, CONTRACT_BOUNDS } from '../contracts/bounds';
 
-const mockGetAllContracts = jest.fn();
+const mockGetContracts = jest.fn();
+const mockGetContractById = jest.fn();
 const mockCreateContract = jest.fn();
+const mockUpdateContract = jest.fn();
+const mockDeleteContract = jest.fn();
+const mockGetContractStats = jest.fn();
+
+jest.mock('../db/database', () => ({
+  getDb: jest.fn().mockReturnValue({}),
+}));
+
+jest.mock('../repositories/contractRepository', () => ({
+  ContractRepository: jest.fn().mockImplementation(() => ({})),
+}));
 
 jest.mock('../services/contracts.service', () => {
   return {
     ContractsService: jest.fn().mockImplementation(() => {
       return {
-        getAllContracts: mockGetAllContracts,
+        getContracts: mockGetContracts,
+        getContractById: mockGetContractById,
         createContract: mockCreateContract,
+        updateContract: mockUpdateContract,
+        deleteContract: mockDeleteContract,
+        getContractStats: mockGetContractStats,
       };
     }),
   };
@@ -31,8 +47,14 @@ describe('ContractsController', () => {
       json: jest.fn(),
     };
     mockNext = jest.fn();
-    mockGetAllContracts.mockClear();
+    
+    // Clear all mocks
+    mockGetContracts.mockClear();
+    mockGetContractById.mockClear();
     mockCreateContract.mockClear();
+    mockUpdateContract.mockClear();
+    mockDeleteContract.mockClear();
+    mockGetContractStats.mockClear();
   });
 
   afterEach(() => {

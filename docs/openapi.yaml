@@ -1,12 +1,38 @@
-openapi: 3.0.3
+openapi: 3.0.0
 info:
-  title: TalentTrust Backend API
-  description: API for managing escrow contract metadata.
-  version: 0.1.0
+  version: 1.0.0
+  title: TalentTrust API
+  description: TalentTrust API Gateway and services documentation
 servers:
-  - url: http://localhost:3001/api/v1
-    description: Local development server
+  - url: /api/v1
 paths:
+  /contracts:
+    get:
+      summary: List contracts
+      responses:
+        "200":
+          description: List of contracts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Contract"
+    post:
+      summary: Create a contract
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateContract"
+      responses:
+        "201":
+          description: Contract created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Contract"
+
   /contracts/{contractId}/metadata:
     parameters:
       - name: contractId
@@ -148,12 +174,133 @@ paths:
         '401':
           description: Unauthorized
 
+  /reputation/{id}:
+    get:
+      summary: Get freelancer reputation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Freelancer reputation profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  data:
+                    type: object
+                    properties:
+                      freelancerId:
+                        type: string
+                      rating:
+                        type: number
+                      reviewCount:
+                        type: number
+    put:
+      summary: Update freelancer reputation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateReputation"
+      responses:
+        "200":
+          description: Updated reputation profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+  /health:
+    get:
+      summary: Health check
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  service:
+                    type: string
+                    example: talenttrust-backend
+
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
   schemas:
+    Contract:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        description:
+          type: string
+        budget:
+          type: number
+        created_by:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateContract:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 5
+          maxLength: 100
+          example: DeFi Bridge Integration
+        description:
+          type: string
+          minLength: 10
+          example: Integrate the Stellar bridge with our DeFi protocol
+        freelancerId:
+          type: string
+          format: uuid
+          example: 123e4567-e89b-12d3-a456-426614174000
+        budget:
+          type: number
+          minimum: 0
+          exclusiveMinimum: true
+          example: 500
+      required:
+        - title
+        - description
+        - budget
+
     ContractMetadata:
       type: object
       properties:
@@ -187,25 +334,30 @@ components:
 
     CreateContractMetadata:
       type: object
-      required:
-        - key
-        - value
       properties:
         key:
           type: string
           minLength: 1
           maxLength: 255
+          pattern: ^[a-zA-Z0-9_-]+$
+          example: payment_status
         value:
           type: string
           minLength: 1
           maxLength: 10000
+          example: pending
         data_type:
           type: string
           enum: [string, number, boolean, json]
           default: string
+          example: string
         is_sensitive:
           type: boolean
           default: false
+          example: false
+      required:
+        - key
+        - value
 
     UpdateContractMetadata:
       type: object
@@ -214,5 +366,27 @@ components:
           type: string
           minLength: 1
           maxLength: 10000
+          example: completed
         is_sensitive:
           type: boolean
+          example: false
+      additionalProperties: false
+
+    UpdateReputation:
+      type: object
+      properties:
+        reviewerId:
+          type: string
+          format: uuid
+          example: 123e4567-e89b-12d3-a456-426614174000
+        rating:
+          type: number
+          minimum: 1
+          maximum: 5
+          example: 5
+        comment:
+          type: string
+          example: Excellent freelancer!
+      required:
+        - reviewerId
+        - rating

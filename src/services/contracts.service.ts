@@ -1,4 +1,6 @@
-import { CreateContractDto } from '../modules/contracts/dto/contract.dto';
+import { CreateContractDto, UpdateContractDto } from '../modules/contracts/dto/contract.dto';
+import { Contract } from '../db/types';
+import { ContractRepository } from '../repositories/contractRepository';
 import { SorobanService } from './soroban.service';
 import { validateContractBounds, ContractBoundsError } from '../contracts/bounds';
 
@@ -8,22 +10,32 @@ import { validateContractBounds, ContractBoundsError } from '../contracts/bounds
  * and orchestration with the Soroban smart contract service.
  */
 export class ContractsService {
+  private repository: ContractsRepository;
   private sorobanService: SorobanService;
 
   // Mock database
   private contracts: any[] = [];
 
-  constructor() {
+  constructor(contractRepository: ContractRepository) {
     this.sorobanService = new SorobanService();
+    this.contractRepository = contractRepository;
   }
 
   /**
-   * Retrieves all contracts, optionally syncing with their on-chain state.
-   * @returns Array of contract metadata.
+   * Retrieves all contracts from the repository.
+   * @returns Array of contract metadata including version field.
    */
-  public async getAllContracts() {
-    // In a real app, we would fetch from DB and map to on-chain state if necessary.
-    return this.contracts;
+  public async getAllContracts(): Promise<Contract[]> {
+    return this.contractRepository.findAll();
+  }
+
+  /**
+   * Retrieves a single contract by ID.
+   * @param id The contract UUID.
+   * @returns The contract or undefined if not found.
+   */
+  public async getContractById(id: string): Promise<Contract | undefined> {
+    return this.contractRepository.findById(id);
   }
 
   /**
@@ -51,6 +63,22 @@ export class ContractsService {
     // Simulate notifying the Soroban service to prepare the transaction
     await this.sorobanService.prepareEscrow(newContract.id, data.budget);
 
-    return newContract;
+    return stats;
+  }
+
+  /**
+   * Updates a contract using Optimistic Concurrency Control.
+   * Destructures `version` from the DTO and delegates to the repository's
+   * atomic compare-and-swap method. `VersionConflictError` propagates
+   * naturally so the error handler can map it to HTTP 409.
+   *
+   * @param id  - UUID of the contract to update.
+   * @param dto - Update payload including the required `version` field.
+   * @returns The updated Contract with an incremented version.
+   * @throws {VersionConflictError} When the stored version does not match `dto.version`.
+   */
+  public async updateContract(id: string, dto: UpdateContractDto): Promise<Contract> {
+    const { version, ...fields } = dto;
+    return this.contractRepository.updateWithVersion(id, fields, version);
   }
 }

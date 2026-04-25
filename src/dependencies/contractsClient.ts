@@ -1,55 +1,38 @@
 import { AppConfig } from '../appConfiguration';
 import { ChaosPolicy } from '../chaos/chaosPolicy';
 import { Contract, ContractsPayload } from '../types/contracts';
+import { UpstreamHttpClient, DependencyError } from './upstreamHttpClient';
 
-export class DependencyError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'DependencyError';
-  }
-}
+export { DependencyError };
 
 /**
  * Fetches contracts from an upstream dependency and can inject outages for resilience testing.
  */
 export class ContractsClient {
+  private readonly client: UpstreamHttpClient;
+
   constructor(
     private readonly config: Pick<AppConfig, 'upstreamContractsUrl' | 'upstreamTimeoutMs'>,
-    private readonly chaosPolicy: ChaosPolicy,
-  ) {}
-
-  async getContracts(): Promise<Contract[]> {
-    const chaosResult = this.chaosPolicy.decide('contracts');
-    if (chaosResult === 'error') {
-      throw new DependencyError('Injected dependency failure');
-    }
-
-    if (chaosResult === 'timeout') {
-      throw new DependencyError('Injected dependency timeout');
-    }
-
-    return this.fetchContracts();
+    chaosPolicy: ChaosPolicy,
+  ) {
+    this.client = new UpstreamHttpClient(
+      {
+        dependencyName: 'contracts',
+        baseUrl: this.config.upstreamContractsUrl,
+        timeoutMs: this.config.upstreamTimeoutMs,
+        retryOptions: { maxAttempts: 3, baseDelayMs: 200, maxDelayMs: 5000 },
+      },
+      chaosPolicy
+    );
   }
 
-  private async fetchContracts(): Promise<Contract[]> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.config.upstreamTimeoutMs);
-
+  async getContracts(): Promise<Contract[]> {
     try {
-      const response = await fetch(this.config.upstreamContractsUrl, {
-        method: 'GET',
-        signal: controller.signal,
-        headers: {
-          Accept: 'application/json',
-        },
+      const payload = await this.client.get<ContractsPayload>('', {
+        headers: { Accept: 'application/json' }
       });
-
-      if (!response.ok) {
-        throw new DependencyError('Upstream returned non-success response');
-      }
-
-      const payload = (await response.json()) as ContractsPayload;
-      if (!Array.isArray(payload?.contracts)) {
+      
+      if (!payload || !Array.isArray(payload.contracts)) {
         throw new DependencyError('Upstream payload validation failed');
       }
 
@@ -58,10 +41,7 @@ export class ContractsClient {
       if (error instanceof DependencyError) {
         throw error;
       }
-
       throw new DependencyError('Upstream dependency unavailable');
-    } finally {
-      clearTimeout(timeout);
     }
   }
 }

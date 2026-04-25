@@ -1,19 +1,30 @@
 import { ChaosPolicy } from '../chaos/chaosPolicy';
 import { ContractsClient, DependencyError } from './contractsClient';
+import axios from 'axios';
+
+jest.mock('axios');
+const mockedAxios = axios as jest.Mocked<typeof axios>;
 
 describe('ContractsClient', () => {
-  const originalFetch = global.fetch;
+  let mockRequest: jest.Mock;
+
+  beforeEach(() => {
+    mockRequest = jest.fn();
+    mockedAxios.create.mockReturnValue({
+      request: mockRequest,
+    } as any);
+    mockedAxios.isCancel = jest.fn().mockReturnValue(false) as any;
+    mockedAxios.isAxiosError = jest.fn().mockReturnValue(false) as any;
+  });
 
   afterEach(() => {
-    global.fetch = originalFetch;
-    jest.restoreAllMocks();
+    jest.clearAllMocks();
   });
 
   it('returns contracts from upstream payload', async () => {
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ contracts: [{ id: 'ct_1', status: 'open' }] }),
-    } as unknown as Response);
+    mockRequest.mockResolvedValue({
+      data: { contracts: [{ id: 'ct_1', status: 'open' }] },
+    });
 
     const client = new ContractsClient(
       { upstreamContractsUrl: 'http://upstream/contracts', upstreamTimeoutMs: 500 },
@@ -33,10 +44,9 @@ describe('ContractsClient', () => {
   });
 
   it('throws when upstream payload is invalid', async () => {
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ items: [] }),
-    } as unknown as Response);
+    mockRequest.mockResolvedValue({
+      data: { items: [] },
+    });
 
     const client = new ContractsClient(
       { upstreamContractsUrl: 'http://upstream/contracts', upstreamTimeoutMs: 500 },

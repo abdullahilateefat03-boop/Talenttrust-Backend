@@ -5,5 +5,13 @@
  */
 
 export { QueueManager } from './queue-manager';
-export { JobType, JobPayload, JobResult } from './types';
+export {
+	JobType,
+	JobPayload,
+	JobResult,
+	JobEnqueueOptions,
+	FailedJobEntry,
+	FailedJobQuery,
+	ReplayJobResult,
+} from './types';
 export { queueConfig, getRedisConfig } from './config';
