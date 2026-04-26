@@ -1,0 +1,194 @@
+openapi: 3.0.0
+info:
+  version: 1.0.0
+  title: TalentTrust API
+  description: TalentTrust API Gateway and services documentation
+servers:
+  - url: /api/v1
+components:
+  schemas:
+    CreateContract:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 5
+          maxLength: 100
+          example: DeFi Bridge Integration
+        description:
+          type: string
+          minLength: 10
+          example: Integrate the Stellar bridge with our DeFi protocol
+        freelancerId:
+          type: string
+          format: uuid
+          example: 123e4567-e89b-12d3-a456-426614174000
+        budget:
+          type: number
+          minimum: 0
+          exclusiveMinimum: true
+          example: 500
+      required:
+        - title
+        - description
+        - budget
+    CreateContractMetadata:
+      type: object
+      properties:
+        key:
+          type: string
+          minLength: 1
+          maxLength: 255
+          pattern: ^[a-zA-Z0-9_-]+$
+          example: payment_status
+        value:
+          type: string
+          minLength: 1
+          maxLength: 10000
+          example: pending
+        data_type:
+          type: string
+          enum:
+            - string
+            - number
+            - boolean
+            - json
+          default: string
+          example: string
+        is_sensitive:
+          type: boolean
+          default: false
+          example: false
+      required:
+        - key
+        - value
+    UpdateContractMetadata:
+      type: object
+      properties:
+        value:
+          type: string
+          minLength: 1
+          maxLength: 10000
+          example: completed
+        is_sensitive:
+          type: boolean
+          example: false
+      additionalProperties: false
+    UpdateReputation:
+      type: object
+      properties:
+        reviewerId:
+          type: string
+          format: uuid
+          example: 123e4567-e89b-12d3-a456-426614174000
+        rating:
+          type: number
+          minimum: 1
+          maximum: 5
+          example: 5
+        comment:
+          type: string
+          example: Excellent freelancer!
+      required:
+        - reviewerId
+        - rating
+  parameters: {}
+paths:
+  /contracts:
+    get:
+      summary: List contracts
+      responses:
+        "200":
+          description: List of contracts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CreateContract"
+    post:
+      summary: Create a contract
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateContract"
+      responses:
+        "201":
+          description: Contract created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateContract"
+  /reputation/{id}:
+    get:
+      summary: Get freelancer reputation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Freelancer reputation profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  data:
+                    type: object
+                    properties:
+                      freelancerId:
+                        type: string
+                      rating:
+                        type: number
+                      reviewCount:
+                        type: number
+    put:
+      summary: Update freelancer reputation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateReputation"
+      responses:
+        "200":
+          description: Updated reputation profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+  /health:
+    get:
+      summary: Health check
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  service:
+                    type: string
+                    example: talenttrust-backend
