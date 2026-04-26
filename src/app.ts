@@ -18,6 +18,11 @@ import reputationRouter from './routes/reputation.routes';
 import dependencyScanRouter from './routes/dependency-scan.routes';
 import { requestIdMiddleware } from './middleware/requestId';
 import { notFoundHandler, errorHandler } from './middleware/errorHandlers';
+import { requestLimitsMiddleware } from './middleware/requestLimits';
+import { applySecurityMiddleware } from './middleware/security';
+import { MetricsService } from './observability/metrics';
+import { rateLimitStore } from './middleware/rateLimiter';
+import { Request, Response, NextFunction } from 'express';
 
 interface AppFactoryOptions {
   includeTerminalHandlers?: boolean;
@@ -55,6 +60,7 @@ export function createApp(options: AppFactoryOptions = {}): express.Application 
 
   // ── Middleware ────────────────────────────────────────────────────────────
   app.use(express.json());
+  app.use(requestLimitsMiddleware);
   app.use(requestIdMiddleware);
   app.use(metricsService.trackHttpRequest.bind(metricsService));
 
@@ -65,7 +71,8 @@ export function createApp(options: AppFactoryOptions = {}): express.Application 
   app.use('/api/v1/dependency-scan', dependencyScanRouter);
 
   if (includeTerminalHandlers) {
-    attachTerminalHandlers(app);
+    app.use(notFoundHandler);
+    app.use(errorHandler);
   }
 
   return app;
