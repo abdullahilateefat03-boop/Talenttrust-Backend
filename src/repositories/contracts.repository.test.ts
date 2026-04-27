@@ -15,7 +15,7 @@ describe('ContractsRepository', () => {
         description: 'A test contract description',
         clientId: '550e8400-e29b-41d4-a716-446655440000',
         budget: 1000,
-        status: 'PENDING',
+        status: 'draft',
       };
 
       const result = await repository.create(contractData);
@@ -24,9 +24,9 @@ describe('ContractsRepository', () => {
         title: contractData.title,
         description: contractData.description,
         clientId: contractData.clientId,
-        budget: contractData.budget,
+        amount: contractData.budget,
         status: contractData.status,
-        freelancerId: null,
+        freelancerId: '',
         terms: null,
         milestones: null,
       });
@@ -94,7 +94,7 @@ describe('ContractsRepository', () => {
         description: 'First contract',
         clientId: '550e8400-e29b-41d4-a716-446655440000',
         budget: 1000,
-        status: 'PENDING',
+        status: 'draft',
       });
 
       await repository.create({
@@ -102,7 +102,7 @@ describe('ContractsRepository', () => {
         description: 'Second contract',
         clientId: '550e8400-e29b-41d4-a716-446655440001',
         budget: 2000,
-        status: 'ACTIVE',
+        status: 'active',
       });
 
       await repository.create({
@@ -110,7 +110,7 @@ describe('ContractsRepository', () => {
         description: 'Third contract',
         clientId: '550e8400-e29b-41d4-a716-446655440000',
         budget: 1500,
-        status: 'COMPLETED',
+        status: 'completed',
       });
     });
 
@@ -135,7 +135,7 @@ describe('ContractsRepository', () => {
       const params: ContractQueryParams = {
         page: 1,
         limit: 10,
-        status: 'PENDING',
+        status: 'draft',
         sortBy: 'createdAt',
         sortOrder: 'desc',
       };
@@ -143,7 +143,7 @@ describe('ContractsRepository', () => {
       const result = await repository.findMany(params);
 
       expect(result.contracts).toHaveLength(1);
-      expect(result.contracts[0].status).toBe('PENDING');
+      expect(result.contracts[0].status).toBe('draft');
     });
 
     it('should filter by clientId', async () => {
@@ -161,34 +161,34 @@ describe('ContractsRepository', () => {
       expect(result.contracts.every(c => c.clientId === '550e8400-e29b-41d4-a716-446655440000')).toBe(true);
     });
 
-    it('should sort by budget in ascending order', async () => {
+    it('should sort by amount in ascending order', async () => {
       const params: ContractQueryParams = {
         page: 1,
         limit: 10,
-        sortBy: 'budget',
+        sortBy: 'amount',
         sortOrder: 'asc',
       };
 
       const result = await repository.findMany(params);
 
-      expect(result.contracts[0].budget).toBe(1000);
-      expect(result.contracts[1].budget).toBe(1500);
-      expect(result.contracts[2].budget).toBe(2000);
+      expect(result.contracts[0].amount).toBe(1000);
+      expect(result.contracts[1].amount).toBe(1500);
+      expect(result.contracts[2].amount).toBe(2000);
     });
 
-    it('should sort by budget in descending order', async () => {
+    it('should sort by amount in descending order', async () => {
       const params: ContractQueryParams = {
         page: 1,
         limit: 10,
-        sortBy: 'budget',
+        sortBy: 'amount',
         sortOrder: 'desc',
       };
 
       const result = await repository.findMany(params);
 
-      expect(result.contracts[0].budget).toBe(2000);
-      expect(result.contracts[1].budget).toBe(1500);
-      expect(result.contracts[2].budget).toBe(1000);
+      expect(result.contracts[0].amount).toBe(2000);
+      expect(result.contracts[1].amount).toBe(1500);
+      expect(result.contracts[2].amount).toBe(1000);
     });
   });
 
@@ -203,22 +203,24 @@ describe('ContractsRepository', () => {
 
       const created = await repository.create(contractData);
       const updateData: UpdateContractDto = {
+        version: 0,
         title: 'Updated Contract',
         budget: 1500,
-        status: 'ACTIVE',
+        status: 'active',
       };
 
       const updated = await repository.update(created.id, updateData);
 
       expect(updated.id).toBe(created.id);
       expect(updated.title).toBe('Updated Contract');
-      expect(updated.budget).toBe(1500);
-      expect(updated.status).toBe('ACTIVE');
+      expect(updated.amount).toBe(1500);
+      expect(updated.status).toBe('active');
       expect(updated.updatedAt).not.toBe(created.updatedAt);
     });
 
     it('should throw error when updating non-existent contract', async () => {
       const updateData: UpdateContractDto = {
+        version: 0,
         title: 'Updated Contract',
       };
 
@@ -238,6 +240,7 @@ describe('ContractsRepository', () => {
 
       const created = await repository.create(contractData);
       const updateData: UpdateContractDto = {
+        version: 0,
         freelancerId: null,
         terms: null,
       };
@@ -300,7 +303,7 @@ describe('ContractsRepository', () => {
         description: 'First contract',
         clientId: '550e8400-e29b-41d4-a716-446655440000',
         budget: 1000,
-        status: 'PENDING',
+        status: 'draft',
       });
 
       await repository.create({
@@ -308,7 +311,7 @@ describe('ContractsRepository', () => {
         description: 'Second contract',
         clientId: '550e8400-e29b-41d4-a716-446655440000',
         budget: 2000,
-        status: 'ACTIVE',
+        status: 'active',
       });
 
       await repository.create({
@@ -316,7 +319,7 @@ describe('ContractsRepository', () => {
         description: 'Third contract',
         clientId: '550e8400-e29b-41d4-a716-446655440001',
         budget: 1500,
-        status: 'PENDING',
+        status: 'draft',
       });
     });
 
@@ -326,7 +329,7 @@ describe('ContractsRepository', () => {
     });
 
     it('should return filtered count by status', async () => {
-      const count = await repository.count({ status: 'PENDING' });
+      const count = await repository.count({ status: 'draft' });
       expect(count).toBe(2);
     });
 

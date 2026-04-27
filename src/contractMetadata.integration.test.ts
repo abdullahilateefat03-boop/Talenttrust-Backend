@@ -6,7 +6,6 @@ import { contractMetadataRoutes } from './modules/contractMetadata/contractMetad
 describe('Contract Metadata Integration Tests', () => {
   let app: express.Application;
   let contractId: string;
-  let userId: string;
   let metadataId: string;
 
   beforeAll(async () => {
@@ -19,11 +18,10 @@ describe('Contract Metadata Integration Tests', () => {
     await database.clearDatabase();
 
     // Create test user
-    const user = await database.createUser({
+    await database.createUser({
       email: 'test@example.com',
       role: 'user'
     });
-    userId = user.id;
 
     // Create test contract owned by demo user
     const contract = await database.createContract({

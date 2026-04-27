@@ -7,7 +7,6 @@
 
 import { QueueManager } from './queue-manager';
 import { JobType } from './types';
-import { RetryPolicyManager } from './retry-manager';
 
 describe('QueueManager', () => {
   let queueManager: QueueManager;
