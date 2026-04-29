@@ -129,19 +129,26 @@ export class QueueManager {
   public async addJob(
     jobType: JobType,
     payload: JobPayload,
-    options?: AddJobOptions
+    options?: AddJobOptions & { correlationId?: string; requestId?: string }
   ): Promise<AddJobResult> {
     const queue = this.queues.get(jobType);
     if (!queue) {
       throw new Error(`Queue for ${jobType} not initialized`);
     }
 
-    const { priority, delay, attempts, dedupeKey } = options ?? {};
+    const { priority, delay, attempts, dedupeKey, correlationId, requestId } = options ?? {};
     const bullOptions: JobsOptions = { priority, delay, attempts };
 
     if (dedupeKey) {
       bullOptions.jobId = dedupeKey;
     }
+
+    // Merge correlation IDs into payload
+    const enrichedPayload = {
+      ...payload,
+      ...(correlationId && { correlationId }),
+      ...(requestId && { requestId }),
+    };
 
     // Pre-check: determine if an active/waiting/delayed job already exists.
     // TOCTOU window exists here, but queue.add() deduplication is the hard
@@ -155,7 +162,8 @@ export class QueueManager {
       }
     }
 
-    const job = await queue.add(jobType, payload, bullOptions);
+    const job = await queue.add(jobType, enrichedPayload, bullOptions);
+    logger.info('Job enqueued', { jobType, jobId: job.id, correlationId, requestId, deduplicated });
     return { jobId: job.id!, deduplicated };
   }
 
@@ -247,7 +255,7 @@ export class QueueManager {
 
   /**
    * Process a job using the appropriate processor
-   * 
+   *
    * @param jobType - Type of job being processed
    * @param job - BullMQ job instance
    * @returns Processing result
@@ -258,10 +266,21 @@ export class QueueManager {
       throw new Error(`No processor found for job type: ${jobType}`);
     }
 
+    // Extract correlation IDs from job payload
+    const payload = job.data as JobPayload & { correlationId?: string; requestId?: string };
+    const correlationId = payload.correlationId;
+    const requestId = payload.requestId || job.id;
+
+    // Create a child logger with correlation context
+    const jobLogger = correlationId || requestId
+      ? logger.child({ correlationId, requestId, jobType })
+      : logger.child({ requestId, jobType });
+
     try {
       return await processor(job.data);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      jobLogger.error('Job processing failed', { error: errorMessage });
       throw new Error(`Job processing failed: ${errorMessage}`);
     }
   }
