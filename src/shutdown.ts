@@ -1,114 +1,128 @@
-/**
- * @module shutdown
- * @description Graceful shutdown coordinator for TalentTrust Backend.
- *
- * Responsibilities:
- * 1. Flip the readiness probe to "not ready" so the load balancer stops
- *    routing new traffic.
- * 2. Stop accepting new HTTP connections (server.close).
- * 3. Drain in-flight work (BullMQ queue shutdown).
- * 4. Close the SQLite database handle.
- * 5. Force-exit if the drain takes longer than `SHUTDOWN_GRACE_MS`.
- *
- * The handler is idempotent — a second signal while draining is ignored.
- *
- * ## Environment variables
- * | Variable | Default | Description |
- * |---|---|---|
- * | `SHUTDOWN_GRACE_MS` | `10000` | Max ms to wait for drain before forced exit. |
- */
-
-import type { Server } from 'http';
-import type Database from 'better-sqlite3';
+import { Server } from 'http';
 import { logger } from './logger';
 
-export interface ShutdownDeps {
-  /** HTTP server to stop accepting connections on. */
-  server: Server;
-  /** SQLite database handle to close. */
-  db: Database.Database;
-  /** Async function that drains in-flight queue work. */
-  drainQueue: () => Promise<void>;
-  /** Flips the readiness probe to false. */
-  setNotReady: () => void;
-  /** Grace period in ms before forced exit (default: SHUTDOWN_GRACE_MS env or 10 000). */
-  gracePeriodMs?: number;
-  /** Override process.exit for testing. */
-  exit?: (code: number) => void;
+/**
+ * Minimal interface satisfied by a BullMQ Worker (and by test fakes).
+ * Using a structural interface instead of importing Worker directly keeps
+ * this module free of a hard runtime dependency on bullmq.
+ */
+export interface WorkerLike {
+  name: string;
+  close(force?: boolean): Promise<void>;
 }
 
-let shutdownInProgress = false;
+export interface ShutdownOptions {
+  /** Max ms to wait for HTTP server to drain in-flight requests. Default 30 s. */
+  httpTimeoutMs?: number;
+  /** Max ms to wait for each BullMQ worker to finish active jobs. Default 30 s. */
+  workerTimeoutMs?: number;
+}
 
-/** Reset idempotency guard — for tests only. */
-export function _resetShutdownState(): void {
-  shutdownInProgress = false;
+export interface CloseableConnection {
+  /** Human-readable name used in log messages (e.g. "Redis", "Postgres"). */
+  name: string;
+  close(): Promise<void>;
 }
 
 /**
- * Performs a graceful shutdown sequence.
- *
- * @param deps - Injected dependencies (server, db, queue drain, readiness setter).
+ * Wraps server.close() in a Promise.
+ * Resolves when all existing connections have ended, or rejects after `timeoutMs`.
  */
-export async function gracefulShutdown(deps: ShutdownDeps): Promise<void> {
-  if (shutdownInProgress) {
-    logger.warn('Shutdown already in progress — ignoring duplicate signal');
-    return;
-  }
-  shutdownInProgress = true;
+function closeHttpServer(server: Server, timeoutMs: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`HTTP server did not drain within ${timeoutMs} ms`));
+    }, timeoutMs);
 
-  const {
-    server,
-    db,
-    drainQueue,
-    setNotReady,
-    exit = process.exit.bind(process),
-  } = deps;
-
-  const gracePeriodMs =
-    deps.gracePeriodMs ??
-    (process.env['SHUTDOWN_GRACE_MS']
-      ? Number(process.env['SHUTDOWN_GRACE_MS'])
-      : 10_000);
-
-  logger.info('Graceful shutdown initiated', { gracePeriodMs });
-
-  // 1. Stop accepting new traffic
-  setNotReady();
-
-  return new Promise<void>((resolve) => {
-    // 2. Force-exit timer
-    const forceTimer = setTimeout(() => {
-      logger.error('Shutdown grace period exceeded — forcing exit');
-      exit(1);
-      resolve();
-    }, gracePeriodMs);
-    // Allow the process to exit naturally if only this timer is left
-    if (typeof forceTimer.unref === 'function') forceTimer.unref();
-
-    const finish = (code: number) => {
-      clearTimeout(forceTimer);
-      exit(code);
-      resolve();
-    };
-
-    // 3. Stop accepting new HTTP connections, then drain, then close DB
-    new Promise<void>((res, rej) => {
-      server.close((err) => (err ? rej(err) : res()));
-    })
-      .then(() => {
-        logger.info('HTTP server closed');
-        return drainQueue();
-      })
-      .then(() => {
-        logger.info('Queue drained');
-        db.close();
-        logger.info('Database closed');
-        logger.info('Graceful shutdown complete');
-        finish(0);
-      })
-      .catch((err: unknown) => {
-        logger.error('Error during shutdown', { err: err instanceof Error ? err : String(err) });
-        finish(1);
-      });
+    server.close((err) => {
+      clearTimeout(timer);
+      if (err) reject(err);
+      else resolve();
+    });
   });
+}
+
+/**
+ * Closes a BullMQ worker, waiting for active jobs to finish.
+ * Passes `force=false` so the worker completes in-flight jobs before stopping —
+ * this is the anti-duplication guarantee: jobs are never re-queued mid-flight.
+ */
+function closeWorker(worker: WorkerLike, timeoutMs: number): Promise<void> {
+  return Promise.race([
+    // force=false → wait for active jobs to complete naturally
+    worker.close(false),
+    new Promise<void>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`Worker "${worker.name}" did not close within ${timeoutMs} ms`)),
+        timeoutMs,
+      ),
+    ),
+  ]);
+}
+
+/**
+ * Registers SIGTERM and SIGINT handlers and coordinates a clean shutdown:
+ *
+ *  1. Stop accepting new HTTP connections (server.close)
+ *  2. Stop BullMQ workers from picking up new jobs; wait for active jobs
+ *  3. Close downstream connections (Redis, Postgres, …)
+ *  4. Exit with code 0 (or 1 on error)
+ *
+ * Calling this function is idempotent — subsequent signals are ignored once
+ * shutdown has started.
+ */
+export function registerShutdownHandlers(
+  server: Server,
+  workers: WorkerLike[],
+  connections: CloseableConnection[],
+  options: ShutdownOptions = {},
+): void {
+  const { httpTimeoutMs = 30_000, workerTimeoutMs = 30_000 } = options;
+
+  let shuttingDown = false;
+
+  async function shutdown(signal: string): Promise<void> {
+    if (shuttingDown) return;
+    shuttingDown = true;
+
+    logger.info('shutdown_initiated', { signal });
+
+    // ── 1. HTTP server ──────────────────────────────────────────────────────
+    try {
+      await closeHttpServer(server, httpTimeoutMs);
+      logger.info('http_drained');
+    } catch (err) {
+      logger.warn('http_drain_timeout', { err });
+    }
+
+    // ── 2. BullMQ workers ───────────────────────────────────────────────────
+    await Promise.allSettled(
+      workers.map(async (w) => {
+        try {
+          await closeWorker(w, workerTimeoutMs);
+          logger.info('bullmq_worker_closed', { worker: w.name });
+        } catch (err) {
+          logger.warn('bullmq_worker_timeout', { worker: w.name, err });
+        }
+      }),
+    );
+
+    // ── 3. Downstream connections ───────────────────────────────────────────
+    await Promise.allSettled(
+      connections.map(async (conn) => {
+        try {
+          await conn.close();
+          logger.info('connection_closed', { connection: conn.name });
+        } catch (err) {
+          logger.warn('connection_close_error', { connection: conn.name, err });
+        }
+      }),
+    );
+
+    logger.info('shutdown_complete');
+    process.exit(0);
+  }
+
+  process.once('SIGTERM', () => void shutdown('SIGTERM'));
+  process.once('SIGINT', () => void shutdown('SIGINT'));
 }

@@ -1,467 +1,278 @@
-/**
- * Tests for webhookDelivery.ts
- *
- * Covers:
- *  #255 — HMAC timestamp tolerance and replay protection
- *  #285 — Multi-key rotation (sign-with-new/verify-with-old, retire-old-key rejection)
- */
-
-import crypto from 'crypto';
-import Database from 'better-sqlite3';
-import axios from 'axios';
-import {
-  computeHmac,
-  safeEqual,
-  verifyWebhookSignature,
-  ensureReplayCacheTable,
-  isReplay,
-  recordSignature,
-  loadSigningSecrets,
-  getToleranceSeconds,
-  WebhookDeliveryService,
-} from './webhookDelivery';
-import {
-  WebhookSignatureError,
-  WebhookTimestampError,
-  WebhookReplayError,
-} from './errors/safeErrors';
-
-jest.mock('axios');
-const mockedAxios = axios as jest.Mocked<typeof axios>;
+import { Registry } from 'prom-client';
+import { WebhookDeliveryService, DeliveryPayload } from './webhookDelivery';
+import { getLabelValues } from './webhookMetrics';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeDb(): Database.Database {
-  const db = new Database(':memory:');
-  ensureReplayCacheTable(db);
-  return db;
+function makeRegistry() {
+  return new Registry();
 }
 
-function sign(secret: string, timestamp: string, body: string): string {
-  return computeHmac(secret, `${timestamp}.${body}`);
+function makeService(registry: Registry) {
+  return new WebhookDeliveryService(registry);
 }
 
-const SECRET = 'test-secret-one';
-const SECRET2 = 'test-secret-two';
-const BODY = JSON.stringify({ event: 'test' });
-const NOW = 1_700_000_000;
+const basePayload: DeliveryPayload = {
+  provider: 'stripe',
+  url: 'https://example.com/webhook',
+  body: { event: 'payment.succeeded' },
+};
+
+async function getCounterValue(
+  registry: Registry,
+  labels: Record<string, string>,
+): Promise<number> {
+  const metrics = await registry.getMetricsAsJSON();
+  const counter = metrics.find((m) => m.name === 'webhook_delivery_attempts_total');
+  if (!counter || !('values' in counter)) return 0;
+  const match = (counter.values as Array<{ labels: Record<string, string>; value: number }>).find(
+    (v) =>
+      Object.entries(labels).every(([k, val]) => v.labels[k] === val),
+  );
+  return match?.value ?? 0;
+}
+
+async function getHistogramSampleCount(
+  registry: Registry,
+  labels: Record<string, string>,
+): Promise<number> {
+  const metrics = await registry.getMetricsAsJSON();
+  const hist = metrics.find((m) => m.name === 'webhook_delivery_latency_seconds');
+  if (!hist || !('values' in hist)) return 0;
+  const countEntry = (
+    hist.values as Array<{ labels: Record<string, string>; value: number; metricName?: string }>
+  ).find(
+    (v) =>
+      v.metricName === 'webhook_delivery_latency_seconds_count' &&
+      Object.entries(labels).every(([k, val]) => v.labels[k] === val),
+  );
+  return countEntry?.value ?? 0;
+}
 
 // ---------------------------------------------------------------------------
-// computeHmac / safeEqual
+// getLabelValues unit tests
 // ---------------------------------------------------------------------------
 
-describe('computeHmac', () => {
-  it('produces a deterministic hex digest', () => {
-    const a = computeHmac(SECRET, 'payload');
-    const b = computeHmac(SECRET, 'payload');
-    expect(a).toBe(b);
-    expect(a).toMatch(/^[0-9a-f]{64}$/);
+describe('getLabelValues', () => {
+  it('returns success for 2xx status codes', () => {
+    expect(getLabelValues(200)).toEqual({ status: 'success', reason: 'unknown' });
+    expect(getLabelValues(201)).toEqual({ status: 'success', reason: 'unknown' });
   });
 
-  it('differs for different secrets', () => {
-    expect(computeHmac(SECRET, 'payload')).not.toBe(computeHmac(SECRET2, 'payload'));
-  });
-});
-
-describe('safeEqual', () => {
-  it('returns true for equal digests', () => {
-    const h = computeHmac(SECRET, 'x');
-    expect(safeEqual(h, h)).toBe(true);
+  it('returns 4xx_client_error for 4xx status codes', () => {
+    expect(getLabelValues(400)).toEqual({ status: 'failure', reason: '4xx_client_error' });
+    expect(getLabelValues(404)).toEqual({ status: 'failure', reason: '4xx_client_error' });
   });
 
-  it('returns false for different digests', () => {
-    expect(safeEqual(computeHmac(SECRET, 'x'), computeHmac(SECRET2, 'x'))).toBe(false);
+  it('returns 5xx_server_error for 5xx status codes', () => {
+    expect(getLabelValues(500)).toEqual({ status: 'failure', reason: '5xx_server_error' });
+    expect(getLabelValues(503)).toEqual({ status: 'failure', reason: '5xx_server_error' });
   });
 
-  it('returns false for malformed hex', () => {
-    expect(safeEqual('not-hex', computeHmac(SECRET, 'x'))).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Replay cache
-// ---------------------------------------------------------------------------
-
-describe('replay cache', () => {
-  it('isReplay returns false for unseen signature', () => {
-    const db = makeDb();
-    expect(isReplay(db, 'sig1', NOW)).toBe(false);
+  it('returns timeout for ETIMEDOUT error', () => {
+    expect(getLabelValues(undefined, 'ETIMEDOUT')).toEqual({ status: 'failure', reason: 'timeout' });
+    expect(getLabelValues(undefined, 'ECONNABORTED')).toEqual({ status: 'failure', reason: 'timeout' });
   });
 
-  it('isReplay returns true after recordSignature', () => {
-    const db = makeDb();
-    recordSignature(db, 'sig1', NOW, 300);
-    expect(isReplay(db, 'sig1', NOW)).toBe(true);
+  it('returns dns_resolution_failure for ENOTFOUND / EAI_AGAIN', () => {
+    expect(getLabelValues(undefined, 'ENOTFOUND')).toEqual({ status: 'failure', reason: 'dns_resolution_failure' });
+    expect(getLabelValues(undefined, 'EAI_AGAIN')).toEqual({ status: 'failure', reason: 'dns_resolution_failure' });
   });
 
-  it('evicts expired entries', () => {
-    const db = makeDb();
-    recordSignature(db, 'sig-old', NOW, 300);
-    // Advance time past expiry
-    expect(isReplay(db, 'sig-old', NOW + 301)).toBe(false);
+  it('returns connection_refused for ECONNREFUSED', () => {
+    expect(getLabelValues(undefined, 'ECONNREFUSED')).toEqual({ status: 'failure', reason: 'connection_refused' });
   });
 
-  it('does not evict non-expired entries', () => {
-    const db = makeDb();
-    recordSignature(db, 'sig-fresh', NOW, 300);
-    expect(isReplay(db, 'sig-fresh', NOW + 100)).toBe(true);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// verifyWebhookSignature — #255 timestamp tolerance
-// ---------------------------------------------------------------------------
-
-describe('verifyWebhookSignature — timestamp tolerance (#255)', () => {
-  it('accepts a valid in-window signature', () => {
-    const db = makeDb();
-    const ts = String(NOW);
-    const sig = sign(SECRET, ts, BODY);
-    const idx = verifyWebhookSignature({
-      body: BODY,
-      signature: sig,
-      timestamp: ts,
-      secrets: [SECRET],
-      nowS: NOW,
-      toleranceS: 300,
-      db,
-    });
-    expect(idx).toBe(0);
-  });
-
-  it('accepts a signature at the edge of the tolerance window', () => {
-    const db = makeDb();
-    const ts = String(NOW - 300);
-    const sig = sign(SECRET, ts, BODY);
-    expect(() =>
-      verifyWebhookSignature({
-        body: BODY,
-        signature: sig,
-        timestamp: ts,
-        secrets: [SECRET],
-        nowS: NOW,
-        toleranceS: 300,
-        db,
-      }),
-    ).not.toThrow();
-  });
-
-  it('rejects an expired timestamp (past)', () => {
-    const db = makeDb();
-    const ts = String(NOW - 301);
-    const sig = sign(SECRET, ts, BODY);
-    expect(() =>
-      verifyWebhookSignature({
-        body: BODY,
-        signature: sig,
-        timestamp: ts,
-        secrets: [SECRET],
-        nowS: NOW,
-        toleranceS: 300,
-        db,
-      }),
-    ).toThrow(WebhookTimestampError);
-  });
-
-  it('rejects a future-skewed timestamp', () => {
-    const db = makeDb();
-    const ts = String(NOW + 301);
-    const sig = sign(SECRET, ts, BODY);
-    expect(() =>
-      verifyWebhookSignature({
-        body: BODY,
-        signature: sig,
-        timestamp: ts,
-        secrets: [SECRET],
-        nowS: NOW,
-        toleranceS: 300,
-        db,
-      }),
-    ).toThrow(WebhookTimestampError);
-  });
-
-  it('rejects a non-numeric timestamp', () => {
-    const db = makeDb();
-    expect(() =>
-      verifyWebhookSignature({
-        body: BODY,
-        signature: 'any',
-        timestamp: 'not-a-number',
-        secrets: [SECRET],
-        nowS: NOW,
-        toleranceS: 300,
-        db,
-      }),
-    ).toThrow(WebhookTimestampError);
+  it('returns unknown for unrecognised errors', () => {
+    expect(getLabelValues(undefined, 'SOME_WEIRD_CODE')).toEqual({ status: 'failure', reason: 'unknown' });
+    expect(getLabelValues()).toEqual({ status: 'failure', reason: 'unknown' });
   });
 });
 
 // ---------------------------------------------------------------------------
-// verifyWebhookSignature — #255 replay protection
-// ---------------------------------------------------------------------------
-
-describe('verifyWebhookSignature — replay protection (#255)', () => {
-  it('rejects a replayed signature', () => {
-    const db = makeDb();
-    const ts = String(NOW);
-    const sig = sign(SECRET, ts, BODY);
-    const opts = {
-      body: BODY,
-      signature: sig,
-      timestamp: ts,
-      secrets: [SECRET],
-      nowS: NOW,
-      toleranceS: 300,
-      db,
-    };
-    // First call succeeds
-    verifyWebhookSignature(opts);
-    // Second call with same signature is a replay
-    expect(() => verifyWebhookSignature(opts)).toThrow(WebhookReplayError);
-  });
-
-  it('accepts the same payload after the tolerance window expires', () => {
-    const db = makeDb();
-    const ts = String(NOW);
-    const sig = sign(SECRET, ts, BODY);
-    // Record it at NOW
-    verifyWebhookSignature({
-      body: BODY,
-      signature: sig,
-      timestamp: ts,
-      secrets: [SECRET],
-      nowS: NOW,
-      toleranceS: 300,
-      db,
-    });
-    // After expiry the cache entry is evicted; but the timestamp is now too old
-    // so it would throw WebhookTimestampError — that's correct behaviour.
-    expect(() =>
-      verifyWebhookSignature({
-        body: BODY,
-        signature: sig,
-        timestamp: ts,
-        secrets: [SECRET],
-        nowS: NOW + 400,
-        toleranceS: 300,
-        db,
-      }),
-    ).toThrow(WebhookTimestampError);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// verifyWebhookSignature — bad HMAC
-// ---------------------------------------------------------------------------
-
-describe('verifyWebhookSignature — bad HMAC', () => {
-  it('rejects a tampered body', () => {
-    const db = makeDb();
-    const ts = String(NOW);
-    const sig = sign(SECRET, ts, BODY);
-    expect(() =>
-      verifyWebhookSignature({
-        body: '{"tampered":true}',
-        signature: sig,
-        timestamp: ts,
-        secrets: [SECRET],
-        nowS: NOW,
-        toleranceS: 300,
-        db,
-      }),
-    ).toThrow(WebhookSignatureError);
-  });
-
-  it('rejects a wrong secret', () => {
-    const db = makeDb();
-    const ts = String(NOW);
-    const sig = sign('wrong-secret', ts, BODY);
-    expect(() =>
-      verifyWebhookSignature({
-        body: BODY,
-        signature: sig,
-        timestamp: ts,
-        secrets: [SECRET],
-        nowS: NOW,
-        toleranceS: 300,
-        db,
-      }),
-    ).toThrow(WebhookSignatureError);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// verifyWebhookSignature — #285 key rotation
-// ---------------------------------------------------------------------------
-
-describe('verifyWebhookSignature — key rotation (#285)', () => {
-  it('verifies with old key when new key is primary', () => {
-    const db = makeDb();
-    const ts = String(NOW);
-    // Signed with old key (SECRET2)
-    const sig = sign(SECRET2, ts, BODY);
-    // Active keys: [new=SECRET, old=SECRET2]
-    const idx = verifyWebhookSignature({
-      body: BODY,
-      signature: sig,
-      timestamp: ts,
-      secrets: [SECRET, SECRET2],
-      nowS: NOW,
-      toleranceS: 300,
-      db,
-    });
-    expect(idx).toBe(1); // matched old key
-  });
-
-  it('verifies with new primary key', () => {
-    const db = makeDb();
-    const ts = String(NOW);
-    const sig = sign(SECRET, ts, BODY);
-    const idx = verifyWebhookSignature({
-      body: BODY,
-      signature: sig,
-      timestamp: ts,
-      secrets: [SECRET, SECRET2],
-      nowS: NOW,
-      toleranceS: 300,
-      db,
-    });
-    expect(idx).toBe(0);
-  });
-
-  it('rejects when old key is retired (removed from list)', () => {
-    const db = makeDb();
-    const ts = String(NOW);
-    // Signed with old key that is no longer active
-    const sig = sign(SECRET2, ts, BODY);
-    expect(() =>
-      verifyWebhookSignature({
-        body: BODY,
-        signature: sig,
-        timestamp: ts,
-        secrets: [SECRET], // only new key
-        nowS: NOW,
-        toleranceS: 300,
-        db,
-      }),
-    ).toThrow(WebhookSignatureError);
-  });
-
-  it('throws when secrets list is empty', () => {
-    const db = makeDb();
-    const ts = String(NOW);
-    const sig = sign(SECRET, ts, BODY);
-    // Empty secrets list → no key matches → WebhookSignatureError
-    expect(() =>
-      verifyWebhookSignature({
-        body: BODY,
-        signature: sig,
-        timestamp: ts,
-        secrets: [],
-        nowS: NOW,
-        toleranceS: 300,
-        db,
-      }),
-    ).toThrow(WebhookSignatureError);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// loadSigningSecrets / getToleranceSeconds
-// ---------------------------------------------------------------------------
-
-describe('loadSigningSecrets', () => {
-  const orig = process.env['WEBHOOK_SIGNING_SECRETS'];
-  afterEach(() => {
-    if (orig === undefined) delete process.env['WEBHOOK_SIGNING_SECRETS'];
-    else process.env['WEBHOOK_SIGNING_SECRETS'] = orig;
-  });
-
-  it('parses comma-separated secrets', () => {
-    process.env['WEBHOOK_SIGNING_SECRETS'] = 'a,b,c';
-    expect(loadSigningSecrets()).toEqual(['a', 'b', 'c']);
-  });
-
-  it('throws when env var is empty', () => {
-    process.env['WEBHOOK_SIGNING_SECRETS'] = '';
-    expect(() => loadSigningSecrets()).toThrow();
-  });
-
-  it('throws when env var is unset', () => {
-    delete process.env['WEBHOOK_SIGNING_SECRETS'];
-    expect(() => loadSigningSecrets()).toThrow();
-  });
-});
-
-describe('getToleranceSeconds', () => {
-  const orig = process.env['WEBHOOK_TIMESTAMP_TOLERANCE_S'];
-  afterEach(() => {
-    if (orig === undefined) delete process.env['WEBHOOK_TIMESTAMP_TOLERANCE_S'];
-    else process.env['WEBHOOK_TIMESTAMP_TOLERANCE_S'] = orig;
-  });
-
-  it('returns 300 by default', () => {
-    delete process.env['WEBHOOK_TIMESTAMP_TOLERANCE_S'];
-    expect(getToleranceSeconds()).toBe(300);
-  });
-
-  it('parses a valid integer', () => {
-    process.env['WEBHOOK_TIMESTAMP_TOLERANCE_S'] = '60';
-    expect(getToleranceSeconds()).toBe(60);
-  });
-
-  it('falls back to 300 for invalid value', () => {
-    process.env['WEBHOOK_TIMESTAMP_TOLERANCE_S'] = 'bad';
-    expect(getToleranceSeconds()).toBe(300);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// WebhookDeliveryService — outbound delivery
+// WebhookDeliveryService integration tests
 // ---------------------------------------------------------------------------
 
 describe('WebhookDeliveryService', () => {
-  beforeEach(() => jest.useFakeTimers());
-  afterEach(() => jest.useRealTimers());
+  describe('successful delivery', () => {
+    it('increments success counter and records latency', async () => {
+      const registry = makeRegistry();
+      const service = makeService(registry);
+      const httpClient = jest.fn().mockResolvedValue({ statusCode: 200 });
 
-  it('delivers successfully and sets HMAC headers', async () => {
-    mockedAxios.post.mockResolvedValueOnce({ status: 200 });
-    const svc = new WebhookDeliveryService();
-    await svc.send(
-      { id: '1', url: 'http://example.com', event: 'test', data: {}, retryCount: 0 },
-      [SECRET],
-    );
-    expect(mockedAxios.post).toHaveBeenCalledWith(
-      'http://example.com',
-      {},
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          'X-Webhook-Signature': expect.stringMatching(/^[0-9a-f]{64}$/),
-          'X-Webhook-Timestamp': expect.stringMatching(/^\d+$/),
-        }),
-      }),
-    );
-    expect(svc.getDlq()).toHaveLength(0);
+      const result = await service.deliver(basePayload, httpClient);
+
+      expect(result.success).toBe(true);
+      expect(result.statusCode).toBe(200);
+      expect(result.durationSeconds).toBeGreaterThanOrEqual(0);
+
+      const count = await getCounterValue(registry, {
+        status: 'success',
+        provider: 'stripe',
+        reason: 'unknown',
+      });
+      expect(count).toBe(1);
+
+      const histCount = await getHistogramSampleCount(registry, {
+        status: 'success',
+        provider: 'stripe',
+      });
+      expect(histCount).toBe(1);
+    });
+
+    it('increments counter again on a second successful call', async () => {
+      const registry = makeRegistry();
+      const service = makeService(registry);
+      const httpClient = jest.fn().mockResolvedValue({ statusCode: 200 });
+
+      await service.deliver(basePayload, httpClient);
+      await service.deliver(basePayload, httpClient);
+
+      const count = await getCounterValue(registry, {
+        status: 'success',
+        provider: 'stripe',
+        reason: 'unknown',
+      });
+      expect(count).toBe(2);
+    });
   });
 
-  it('retries on failure and eventually moves to DLQ', async () => {
-    mockedAxios.post.mockRejectedValue(new Error('Network Error'));
-    const svc = new WebhookDeliveryService();
-    const payload = {
-      id: '2',
-      url: 'http://example.com',
-      event: 'test',
-      data: {},
-      retryCount: 0,
-    };
-    const sendOp = svc.send(payload, [SECRET]);
-    for (let i = 0; i < 20; i++) {
-      await jest.runOnlyPendingTimersAsync();
-    }
-    await sendOp;
-    expect(svc.getDlq()).toHaveLength(1);
-    expect(svc.getDlq()[0]!.id).toBe('2');
+  describe('failure scenarios', () => {
+    it('records 5xx_server_error on HTTP 500', async () => {
+      const registry = makeRegistry();
+      const service = makeService(registry);
+      const httpClient = jest.fn().mockResolvedValue({ statusCode: 500 });
+
+      const result = await service.deliver(basePayload, httpClient);
+
+      expect(result.success).toBe(false);
+      const count = await getCounterValue(registry, {
+        status: 'failure',
+        provider: 'stripe',
+        reason: '5xx_server_error',
+      });
+      expect(count).toBe(1);
+    });
+
+    it('records 4xx_client_error on HTTP 404', async () => {
+      const registry = makeRegistry();
+      const service = makeService(registry);
+      const httpClient = jest.fn().mockResolvedValue({ statusCode: 404 });
+
+      const result = await service.deliver(basePayload, httpClient);
+
+      expect(result.success).toBe(false);
+      const count = await getCounterValue(registry, {
+        status: 'failure',
+        provider: 'stripe',
+        reason: '4xx_client_error',
+      });
+      expect(count).toBe(1);
+    });
+
+    it('records timeout on ETIMEDOUT network error', async () => {
+      const registry = makeRegistry();
+      const service = makeService(registry);
+      const err = Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' });
+      const httpClient = jest.fn().mockRejectedValue(err);
+
+      const result = await service.deliver(basePayload, httpClient);
+
+      expect(result.success).toBe(false);
+      expect(result.statusCode).toBeUndefined();
+      const count = await getCounterValue(registry, {
+        status: 'failure',
+        provider: 'stripe',
+        reason: 'timeout',
+      });
+      expect(count).toBe(1);
+    });
+
+    it('records dns_resolution_failure on ENOTFOUND', async () => {
+      const registry = makeRegistry();
+      const service = makeService(registry);
+      const err = Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' });
+      const httpClient = jest.fn().mockRejectedValue(err);
+
+      await service.deliver(basePayload, httpClient);
+
+      const count = await getCounterValue(registry, {
+        status: 'failure',
+        provider: 'stripe',
+        reason: 'dns_resolution_failure',
+      });
+      expect(count).toBe(1);
+    });
+
+    it('records connection_refused on ECONNREFUSED', async () => {
+      const registry = makeRegistry();
+      const service = makeService(registry);
+      const err = Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' });
+      const httpClient = jest.fn().mockRejectedValue(err);
+
+      await service.deliver(basePayload, httpClient);
+
+      const count = await getCounterValue(registry, {
+        status: 'failure',
+        provider: 'stripe',
+        reason: 'connection_refused',
+      });
+      expect(count).toBe(1);
+    });
+  });
+
+  describe('cardinality safety', () => {
+    it('maps unknown providers to "generic"', async () => {
+      const registry = makeRegistry();
+      const service = makeService(registry);
+      const httpClient = jest.fn().mockResolvedValue({ statusCode: 200 });
+
+      await service.deliver({ ...basePayload, provider: 'some-random-provider-xyz' }, httpClient);
+
+      const count = await getCounterValue(registry, {
+        status: 'success',
+        provider: 'generic',
+        reason: 'unknown',
+      });
+      expect(count).toBe(1);
+    });
+
+    it('does not create a label entry for an arbitrary provider name', async () => {
+      const registry = makeRegistry();
+      const service = makeService(registry);
+      const httpClient = jest.fn().mockResolvedValue({ statusCode: 200 });
+
+      await service.deliver({ ...basePayload, provider: 'webhook-id-abc123' }, httpClient);
+
+      // The raw provider name must NOT appear in the metrics output
+      const raw = await registry.metrics();
+      expect(raw).not.toContain('webhook-id-abc123');
+    });
+  });
+
+  describe('latency histogram', () => {
+    it('records one observation per delivery call', async () => {
+      const registry = makeRegistry();
+      const service = makeService(registry);
+      const httpClient = jest.fn().mockResolvedValue({ statusCode: 200 });
+
+      await service.deliver(basePayload, httpClient);
+      await service.deliver(basePayload, httpClient);
+      await service.deliver({ ...basePayload, provider: 'github' }, httpClient);
+
+      const stripeCount = await getHistogramSampleCount(registry, {
+        status: 'success',
+        provider: 'stripe',
+      });
+      expect(stripeCount).toBe(2);
+
+      const githubCount = await getHistogramSampleCount(registry, {
+        status: 'success',
+        provider: 'github',
+      });
+      expect(githubCount).toBe(1);
+    });
   });
 });

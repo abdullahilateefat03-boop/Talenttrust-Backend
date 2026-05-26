@@ -10,6 +10,10 @@ Handles contract metadata, reputation, and integration with Stellar/Soroban.
 - **Email Notifications**: Non-blocking email delivery
 - **Reputation System**: Background reputation score calculations
 - **Blockchain Sync**: Efficient blockchain data synchronization
+- **Idempotent Event Processing**: Guaranteed safe event replay with deduplication
+- **Strict Schema Validation**: Contract-specific payload validation
+- **Audit Trail**: Complete processing history and statistics
+- **Stale-While-Revalidate Caching**: SWR caching for upstream resources with degraded signals
 
 ## Dependency Chaos Testing
 
@@ -61,14 +65,6 @@ All handled errors return:
 
 Detailed notes are in `docs/backend/error-handling.md`.
 
-## Features
-
-- **Smart Contract Integration**: Handles contract metadata and lifecycle management
-- **Reputation System**: Tracks and manages freelancer reputation
-- **Data Retention Controls**: Configurable compliance-ready data retention and archival
-- **Audit Logging**: Complete audit trail for compliance verification
-- **GDPR/CCPA Ready**: Built-in support for major compliance frameworks
-
 ## Contract Event Processing
 
 The backend now includes a deterministic contract event processing pipeline focused on three semantics:
@@ -77,14 +73,14 @@ The backend now includes a deterministic contract event processing pipeline focu
 2. Deduplication: compute a stable event identity key (`contractId:eventId:sequence`) and treat replays as idempotent duplicates.
 3. Persistence: store accepted events through a repository abstraction (current implementation: in-memory).
 
-### Endpoints
+### Event Ingestion Endpoints
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/health` | Service health |
-| `POST` | `/api/v1/contracts/events` | Ingest contract event payload |
-| `GET` | `/api/v1/contracts/events` | List persisted events |
-| `GET` | `/api/v1/contracts` | List unique contract ids from persisted events |
+| `POST` | `/api/v1/events` | Process events with idempotency guarantees |
+| `POST` | `/api/v1/events/validate` | Validate events without processing |
+| `GET` | `/api/v1/events/stats` | Processing statistics |
+| `GET` | `/api/v1/contracts/{contractId}/history` | Contract event history |
 
 ### Ingestion outcomes
 
@@ -119,8 +115,31 @@ npm install
 | `npm run lint:fix` | Auto-fix lint issues |
 | `npm run audit:ci` | Fail on HIGH/CRITICAL npm vulnerabilities |
 
+## Configuration
+
+Copy environment template:
+```bash
+cp .env.example .env
+```
+
+Key event ingestion configuration:
+```bash
+# Event Ingestion Configuration
+ENABLE_STRICT_VALIDATION=true
+ENABLE_PAYLOAD_INTEGRITY_CHECK=true
+MAX_EVENT_AGE_MS=86400000
+EVENT_BATCH_SIZE=100
+EVENT_TIMEOUT_MS=5000
+```
+
+For full configuration details, see [docs/backend/config.md](docs/backend/config.md).
+
 ## Documentation
+
 - [Backend Notification Services](./docs/backend/notifications.md)
+- [Event Ingestion Idempotency](docs/EVENT_INGESTION_IDEMPOTENCY.md)
+- [SLA/SLO Definitions and Alert Thresholds](docs/backend/SLA_SLO.md)
+- [Redis Testing Guide](docs/backend/redis-testing-guide.md)
 
 ## CI/CD
 
@@ -134,6 +153,10 @@ GitHub Actions runs four gates on every push and pull request to `main`:
 All four checks must pass before a PR can be merged. See
 [docs/backend/branch-protection.md](docs/backend/branch-protection.md) for
 the recommended GitHub branch protection settings.
+
+## License
+
+MIT License - see LICENSE file for details.
 
 ## Project Structure
 
@@ -176,18 +199,24 @@ Coverage thresholds are enforced in Jest at 95% for statements, branches, functi
 4. Current persistence is in-memory and intended for testability and local development; production hardening should add durable storage and capacity limits.
 5. Trust boundary remains the ingestion endpoint; event authenticity and signature verification are future integration concerns.
 
-## Environment Variables
-
-All configuration is managed through `src/config/` and validated at startup. Copy `.env.example` to `.env` to get started. See [docs/backend/config.md](docs/backend/config.md) for full details.
+All configuration is managed through `src/config/` and validated at startup using **Zod**. This ensures a fail-fast behavior with clear error messages. Copy `.env.example` to `.env` to get started. See [docs/backend/config.md](docs/backend/config.md) for full details.
 
 | Variable | Default | Description |
 |---|---|---|
 | `PORT` | `3001` | HTTP port for the Express server |
-| `NODE_ENV` | `development` | Runtime environment |
+| `NODE_ENV` | `development` | Runtime environment (`development`, `staging`, `production`, `test`) |
+| `API_BASE_URL` | `http://localhost:${PORT}` | Base URL for the API |
+| `DEBUG` | `false` | Enable/disable debug logging |
+| `DATABASE_URL` | *(optional)* | Database connection string |
+| `JWT_SECRET` | *(optional)* | Secret used for JWT signing (min 8 chars) |
 | `STELLAR_HORIZON_URL` | `https://horizon-testnet.stellar.org` | Stellar Horizon API endpoint |
 | `STELLAR_NETWORK_PASSPHRASE` | `Test SDF Network ; September 2015` | Network passphrase for signing |
 | `SOROBAN_RPC_URL` | `https://soroban-testnet.stellar.org` | Soroban JSON-RPC endpoint |
 | `SOROBAN_CONTRACT_ID` | *(empty)* | Deployed escrow contract ID |
+| `ACTIVE_COLOR` | `blue` | Active backend color for blue-green routing |
+| `BLUE_PORT` | `3001` | Port for the 'blue' backend |
+| `GREEN_PORT` | `3002` | Port for the 'green' backend |
+
 
 ## API Endpoints
 
@@ -308,7 +337,7 @@ The backend uses an embedded **SQLite** database (via `better-sqlite3`) — no e
 | -------------------- | ---------------- | ----------------------------------------------------------- |
 | `DB_PATH`            | `talenttrust.db` | Path to the SQLite file. Use `:memory:` for ephemeral mode. |
 
-Schema migrations run automatically on startup. See [`docs/backend/database.md`](docs/backend/database.md) for full documentation: schema, repository API, configuration, and security notes.
+Schema migrations run automatically on startup and record applied versions in `schema_version`. See [`docs/backend/database.md`](docs/backend/database.md) for full documentation: schema, versioning, rollback guidance, repository API, configuration, and security notes.
 
 ## Circuit Breaker
 
@@ -386,3 +415,4 @@ const data = await withRetry(() => fetchFromApi(), {
 | `maxDelayMs` | number | 5000 | Max delay cap in ms |
 | `jitter` | boolean | true | Adds randomness to delay |
 | `isRetryable` | function | `() => true` | Controls which errors retry |
+>>>>>>> 93540b906cfee697dd227c0a2fcc9a575f9d1ba5
