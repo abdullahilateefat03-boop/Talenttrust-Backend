@@ -1,159 +1,197 @@
 /**
  * @module logger
+ * @description Structured JSON logger for TalentTrust Backend.
  *
- * Centralized logger with automatic redaction of sensitive data.
+ * Provides a singleton logger that emits newline-delimited JSON records to
+ * stdout (errors to stderr).  Every record includes a mandatory set of
+ * correlation fields so that log lines can be joined across services:
  *
- * ## Usage
- * Replace all `console.log`, `console.error`, `console.warn` calls with:
- * ```typescript
- * import { logger } from './logger';
+ *   - timestamp  – ISO-8601 UTC
+ *   - level      – debug | info | warn | error
+ *   - message    – human-readable description
+ *   - requestId  – per-request UUID (injected by middleware, optional here)
+ *   - correlationId – caller-supplied trace ID (optional)
+ *   - service    – constant "talenttrust-backend"
+ *   - ...extra   – any additional context fields
  *
- * logger.log('User logged in', { userId: 123 });
- * logger.error('Authentication failed', error);
- * logger.warn('Rate limit approaching', { provider: 'acme' });
- * ```
- *
- * ## Security
- * All log arguments are automatically redacted before being written to the
- * console. This ensures that secrets (Stellar seeds, HMAC keys, Bearer tokens)
- * never reach the log transport layer.
- *
- * ## Performance
- * Redaction is applied lazily (only when logging). No overhead for code paths
- * that don't log.
+ * Security note: the logger never serialises Error.stack in production to
+ * avoid leaking internal file paths.  In non-production environments the
+ * stack is included to aid debugging.
  */
 
-import { redactDeep } from './redact';
 
-// ---------------------------------------------------------------------------
-// Safe Logging Functions
-// ---------------------------------------------------------------------------
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
-/**
- * Safe log function that redacts sensitive data before logging.
- *
- * @param level - Log level ('log', 'error', 'warn', 'info', 'debug').
- * @param args - Arguments to log (will be redacted).
- */
-function safeLog(level: 'log' | 'error' | 'warn' | 'info' | 'debug', ...args: unknown[]): void {
-  const redacted = args.map((arg) => redactDeep(arg));
-  console[level](...redacted);
+/** Fields that every log record must carry. */
+export interface BaseLogRecord {
+  timestamp: string;
+  level: LogLevel;
+  message: string;
+  service: string;
+  requestId?: string;
+  correlationId?: string;
 }
 
-// ---------------------------------------------------------------------------
-// Logger API
-// ---------------------------------------------------------------------------
+/** A complete log record – base fields plus arbitrary context. */
+export type LogRecord = BaseLogRecord & Record<string, unknown>;
+
+/** Context that can be bound to a child logger instance. */
+export interface LogContext {
+  requestId?: string;
+  correlationId?: string;
+  [key: string]: unknown;
+}
+
+const SERVICE_NAME = 'talenttrust-backend';
 
 /**
- * Centralized logger with automatic redaction.
- *
- * Use this instead of `console.log`, `console.error`, etc. to ensure
- * sensitive data is never logged.
- *
- * @example
- * ```typescript
- * import { logger } from './logger';
- *
- * logger.log('User logged in', { userId: 123, secret: 'S...' });
- * // Output: User logged in { userId: 123, secret: '[REDACTED]' }
- * ```
+ * Safely serialise an Error into a plain object.
+ * Stack traces are omitted in production to prevent path disclosure.
  */
-export const logger = {
-  /**
-   * Log informational messages.
-   *
-   * @param args - Arguments to log (will be redacted).
-   */
-  log(...args: unknown[]): void {
-    safeLog('log', ...args);
-  },
+function serializeError(err: Error): Record<string, unknown> {
+  const obj: Record<string, unknown> = {
+    type: err.name,
+    message: err.message,
+  };
+  if (process.env.NODE_ENV !== 'production' && err.stack) {
+    obj.stack = err.stack;
+  }
+  return obj;
+}
 
-  /**
-   * Log error messages.
-   *
-   * @param args - Arguments to log (will be redacted).
-   */
-  error(...args: unknown[]): void {
-    safeLog('error', ...args);
-  },
+/**
+ * Sanitise a context object so that sensitive keys are never logged.
+ * Extend this list as the domain grows.
+ */
+const redactionPaths = SENSITIVE_KEYS.flatMap(key => [
+  key,
+  `*.${key}`,
+]);
 
-  /**
-   * Log warning messages.
-   *
-   * @param args - Arguments to log (will be redacted).
-   */
-  warn(...args: unknown[]): void {
-    safeLog('warn', ...args);
-  },
+function sanitize(obj: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (SENSITIVE_KEYS.has(k.toLowerCase())) {
+      out[k] = '[REDACTED]';
+    } else if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+      out[k] = sanitize(v as Record<string, unknown>);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
 
-  /**
-   * Log informational messages (alias for `log`).
-   *
-   * @param args - Arguments to log (will be redacted).
-   */
-  info(...args: unknown[]): void {
-    safeLog('info', ...args);
-  },
-
-  /**
-   * Log debug messages.
-   *
-   * @param args - Arguments to log (will be redacted).
-   */
-  debug(...args: unknown[]): void {
-    safeLog('debug', ...args);
-  },
+/** Core write function – separated so tests can spy on it. */
+let writeRecordImpl: (record: LogRecord) => void = (record: LogRecord): void => {
+  const line = JSON.stringify(record);
+  if (record.level === 'error') {
+    process.stderr.write(line + '\n');
+  } else {
+    process.stdout.write(line + '\n');
+  }
 };
 
-// ---------------------------------------------------------------------------
-// Legacy Console Wrapper (Optional)
-// ---------------------------------------------------------------------------
+export function writeRecord(record: LogRecord): void {
+  writeRecordImpl(record);
+}
+
+/** Test helper to override the write implementation */
+export function setWriteRecordImpl(impl: (record: LogRecord) => void): void {
+  writeRecordImpl = impl;
+}
 
 /**
- * Wrap the global `console` object to automatically redact all logs.
+ * Logger class.
  *
- * WARNING: This is a global monkey-patch. Use with caution.
- * Only enable this if you want to ensure that ALL console.log calls
- * (including third-party libraries) are redacted.
- *
- * @example
- * ```typescript
- * import { wrapConsole } from './logger';
- *
- * wrapConsole(); // Enable global redaction
- *
- * console.log('Secret:', 'S...'); // Automatically redacted
- * ```
+ * Instantiate via `createLogger()` or use the default `logger` singleton.
+ * Use `logger.child(ctx)` to create a request-scoped child that automatically
+ * includes `requestId` / `correlationId` on every record.
  */
-export function wrapConsole(): void {
-  const originalLog = console.log;
-  const originalError = console.error;
-  const originalWarn = console.warn;
-  const originalInfo = console.info;
-  const originalDebug = console.debug;
+export class Logger {
+  private readonly context: LogContext;
 
-  console.log = (...args: unknown[]) => {
-    const redacted = args.map((arg) => redactDeep(arg));
-    originalLog(...redacted);
-  };
+  constructor(context: LogContext = {}) {
+    this.context = context;
+  }
 
-  console.error = (...args: unknown[]) => {
-    const redacted = args.map((arg) => redactDeep(arg));
-    originalError(...redacted);
-  };
+  /**
+   * Create a child logger that merges additional context into every record.
+   *
+   * @param ctx - Extra fields to bind (e.g. `{ requestId, correlationId }`).
+   */
+  child(ctx: LogContext): Logger {
+    return new Logger({ ...this.context, ...ctx });
+  }
 
-  console.warn = (...args: unknown[]) => {
-    const redacted = args.map((arg) => redactDeep(arg));
-    originalWarn(...redacted);
-  };
+  /** @internal Build and emit a log record. */
+  private log(
+    level: LogLevel,
+    message: string,
+    extra: Record<string, unknown> = {},
+  ): void {
+    const { requestId, correlationId, ...rest } = this.context;
 
-  console.info = (...args: unknown[]) => {
-    const redacted = args.map((arg) => redactDeep(arg));
-    originalInfo(...redacted);
-  };
+    // Merge context + caller extras, then sanitise the whole thing.
+    const merged = sanitize({ ...rest, ...extra });
 
-  console.debug = (...args: unknown[]) => {
-    const redacted = args.map((arg) => redactDeep(arg));
-    originalDebug(...redacted);
-  };
+    const record: LogRecord = {
+      timestamp: new Date().toISOString(),
+      level,
+      message,
+      service: SERVICE_NAME,
+      ...(requestId !== undefined && { requestId }),
+      ...(correlationId !== undefined && { correlationId }),
+      ...merged,
+    };
+
+    // Remove undefined properties to match expected behavior
+    Object.keys(record).forEach(key => {
+      if (record[key as keyof LogRecord] === undefined) {
+        delete record[key as keyof LogRecord];
+      }
+    });
+
+    writeRecord(record);
+  }
+
+  debug(message: string, extra?: Record<string, unknown>): void {
+    this.log('debug', message, extra);
+  }
+
+  info(message: string, extra?: Record<string, unknown>): void {
+    this.log('info', message, extra);
+  }
+
+  warn(message: string, extra?: Record<string, unknown>): void {
+    this.log('warn', message, extra);
+  }
+
+  /**
+   * Log at error level.  Pass an `Error` instance via `extra.err` and it will
+   * be serialised safely.
+   */
+  error(message: string, extra?: Record<string, unknown>): void {
+    const safeExtra: Record<string, unknown> = { ...extra };
+    if (safeExtra['err'] instanceof Error) {
+      safeExtra['err'] = serializeError(safeExtra['err'] as Error);
+    }
+    this.log('error', message, safeExtra);
+  }
+}
+
+/** Application-wide default logger (no request context). */
+export const logger = new Logger();
+
+/** Factory for creating named loggers with pre-bound context. */
+export function createLogger(context: LogContext = {}): Logger {
+  return new Logger(context);
+}
+
+/**
+ * Utility function to create a request-scoped logger with correlation IDs.
+ * This is typically used in middleware.
+ */
+export function createRequestLogger(requestId: string, correlationId?: string): Logger {
+  return createLogger({ requestId, correlationId });
 }
