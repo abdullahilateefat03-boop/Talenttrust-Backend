@@ -24,6 +24,12 @@ export interface CloseableConnection {
   close(): Promise<void>;
 }
 
+let draining = false;
+
+export function isReadinessDraining(): boolean {
+  return draining;
+}
+
 /**
  * Wraps server.close() in a Promise.
  * Resolves when all existing connections have ended, or rejects after `timeoutMs`.
@@ -84,6 +90,7 @@ export function registerShutdownHandlers(
   async function shutdown(signal: string): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
+    draining = true;
 
     logger.info('shutdown_initiated', { signal });
 
