@@ -25,6 +25,8 @@ export interface EventProcessingAudit {
   payloadHash: string;
   processedAt: Date;
   createdAt: Date;
+  /** Optional correlation ID for distributed tracing across service boundaries. */
+  correlationId?: string;
 }
 
 export interface EventValidationError {
