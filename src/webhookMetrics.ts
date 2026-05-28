@@ -67,6 +67,13 @@ export function createWebhookMetrics(registry: Registry) {
     registers: [registry],
   });
 
+  const deliveryRetriesTotal = new Counter({
+    name: 'webhook_delivery_retries_total',
+    help: 'Total number of webhook delivery retries due to transient failures',
+    labelNames: ['provider', 'reason'] as const,
+    registers: [registry],
+  });
+
   const dlqOperationsTotal = new Counter({
     name: 'webhook_dlq_operations_total',
     help: 'Total number of DLQ operations',
@@ -74,7 +81,7 @@ export function createWebhookMetrics(registry: Registry) {
     registers: [registry],
   });
 
-  return { deliveryAttemptsTotal, deliveryLatencySeconds, dlqOperationsTotal };
+  return { deliveryAttemptsTotal, deliveryLatencySeconds, deliveryRetriesTotal, dlqOperationsTotal };
 }
 
 export type WebhookMetrics = ReturnType<typeof createWebhookMetrics>;
