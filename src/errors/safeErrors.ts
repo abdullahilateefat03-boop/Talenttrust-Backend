@@ -31,6 +31,7 @@ export const SAFE_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   contract_metadata_mismatch: 'Contract metadata does not match expected value',
   payload_too_large: 'Payload Too Large',
   unsupported_media_type: 'Unsupported Media Type',
+  invalid_webhook_signature: 'Webhook signature verification failed',
 };
 
 /**
