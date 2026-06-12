@@ -6,7 +6,7 @@
  * when this file is the program entry and Jest is not running.
  */
 
-import type { Request, Response } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import { createApp, attachTerminalHandlers } from './app';
 import { AppError } from './errors/appError';
 import { JobType, JobPayload, QueueManager } from './queue';
@@ -15,7 +15,7 @@ import { createAuditRouter } from './audit/router';
 import { createRateLimiter } from './middleware/rateLimiter';
 import { rateLimitConfig } from './config/rateLimit';
 import { requireAuth, requireRole } from './middleware/authorization';
-import type { AuthenticatedRequest } from './middleware/auth';
+import { authMiddleware, type AuthenticatedRequest } from './middleware/auth';
 import { adminAuthGuard } from './middleware/adminAuthGuard';
 
 const queueManager = QueueManager.getInstance();
@@ -172,7 +172,7 @@ app.post(
   },
 );
 
-app.post('/api/v1/jobs', async (req: Request, res: Response) => {
+app.post('/api/v1/jobs', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { type, payload, options } = req.body as {
       type?: string;
