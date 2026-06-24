@@ -16,7 +16,8 @@
  *  - In production, restrict filesystem permissions on the DB file (chmod 600).
  */
 
-import Database from "better-sqlite3";
+import * as Database from "./betterSqlite3";
+
 import path from "path";
 import { runMigrations } from "./migrations";
 
@@ -36,7 +37,7 @@ export function getDb(dbPath?: string): Database.Database {
     process.env["DB_PATH"] ??
     path.join(process.cwd(), "talenttrust.db");
 
-  instance = new Database(resolvedPath);
+  instance = new Database.default(resolvedPath);
 
   // Apply idempotent pragmas for performance and concurrency
   instance.pragma("journal_mode = WAL"); // Better concurrency

@@ -2,7 +2,7 @@ import { ReputationProfile } from '../types/reputation';
 import { ReputationRepository, ReputationEntry } from '../repositories/reputationRepository';
 import { auditService } from '../audit/service';
 import { ForbiddenError, ConflictError, ValidationError } from '../errors/appError';
-import Database from 'better-sqlite3';
+import Database from '../db/betterSqlite3';
 import { createHash } from 'crypto';
 import { validateEnv } from '../config/env.schema';
 

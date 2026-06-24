@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import type Database from 'better-sqlite3';
+import * as Database from "../db/betterSqlite3";
 import { computeEntryHash, GENESIS_HASH } from './store';
 import type { AuditEntry, AuditQuery, CreateAuditEntryInput, IntegrityReport } from './types';
 import type { AuditLogRepository } from './repository';

@@ -15,7 +15,7 @@
  * @module queue/webhook-dlq
  */
 
-import Database from 'better-sqlite3';
+import * as Database from '../db/betterSqlite3';
 import path from 'path';
 import * as crypto from 'crypto';
 import { Counter, Registry } from 'prom-client';
@@ -89,7 +89,7 @@ class WebhookDLQStorage {
 
   constructor(dbPath?: string, config: Partial<DLQConfig> = {}) {
     const resolvedPath = dbPath || process.env.WEBHOOK_DLQ_PATH || path.join(process.cwd(), 'data', 'webhook-dlq.db');
-    this.db = new Database(resolvedPath);
+    this.db = new Database.default(resolvedPath);
     this.config = { ...DEFAULT_DLQ_CONFIG, ...config };
     this.initialize();
   }

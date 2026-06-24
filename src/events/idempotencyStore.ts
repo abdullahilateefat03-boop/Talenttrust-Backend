@@ -16,7 +16,7 @@
  * - Idempotency keys are HMAC-SHA256 hashes (not reversible).
  */
 
-import Database from 'better-sqlite3';
+import * as Database from '../db/betterSqlite3';
 import { createHmac } from 'crypto';
 import type { IdempotencyEntry, IncomingEvent, IdempotencyConfig } from './types';
 
@@ -107,7 +107,7 @@ export class IdempotencyStore {
    */
   constructor(dbPath: string = ':memory:', config?: IdempotencyConfig) {
     this.config = config ?? loadIdempotencyConfig();
-    this.db = new Database(dbPath);
+    this.db = new Database.default(dbPath);
 
     // Enable WAL mode for better concurrent read performance
     this.db.pragma('journal_mode = WAL');

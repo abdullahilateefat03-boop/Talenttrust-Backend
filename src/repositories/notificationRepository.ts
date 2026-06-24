@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import * as Database from '../db/betterSqlite3';
 import { randomUUID } from 'crypto';
 
 interface NotificationRow {
