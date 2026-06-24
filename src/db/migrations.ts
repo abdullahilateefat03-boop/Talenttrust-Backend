@@ -65,6 +65,30 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 3,
+    name: "create_reputation_entries",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS reputation_entries (
+          id          TEXT    PRIMARY KEY,
+          reviewer_id TEXT    NOT NULL REFERENCES users(id),
+          target_id   TEXT    NOT NULL REFERENCES users(id),
+          rating      INTEGER NOT NULL CHECK (rating >= 1 AND rating <= 5),
+          comment     TEXT    CHECK (length(comment) <= 1000),
+          context_id  TEXT    NOT NULL REFERENCES contracts(id),
+          created_at  TEXT    NOT NULL,
+          UNIQUE(reviewer_id, target_id, context_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_reputation_entries_target_id
+          ON reputation_entries(target_id);
+
+        CREATE INDEX IF NOT EXISTS idx_reputation_entries_context_id
+          ON reputation_entries(context_id);
+      `);
+    },
+  },
 ];
 
 function ensureMigrationTable(db: Database.Database): void {

@@ -53,12 +53,21 @@ export class ReputationService {
       throw new Error('ReputationService not initialized. Call initialize() first.');
     }
 
-    // 1. BLOCK self-rating
+    /**
+     * Guard 1 — Self-rating prevention.
+     * A user must not be able to inflate their own reputation score.
+     * @throws {ForbiddenError} When reviewerId === targetId.
+     */
     if (reviewerId === targetId) {
       throw new ForbiddenError('Users cannot rate themselves');
     }
 
-    // 2. BLOCK duplicate ratings (application-level check)
+    /**
+     * Guard 2 — Duplicate-rating prevention (application-level).
+     * A secondary DB-level UNIQUE constraint exists as a safety net.
+     * Checked here first to return a friendly 409 before hitting the DB.
+     * @throws {ConflictError} When a rating for the same reviewer/target/context already exists.
+     */
     const existing = this.repository.findByReviewerTargetContext(
       reviewerId,
       targetId,
@@ -68,7 +77,12 @@ export class ReputationService {
       throw new ConflictError('Rating already exists for this reviewer, target, and context');
     }
 
-    // 3. BLOCK unauthorized rating (verify contract participation)
+    /**
+     * Guard 3 — Contract-participation check.
+     * Both the reviewer and the target must be party to the referenced contract.
+     * This prevents ratings between arbitrary users who never worked together.
+     * @throws {ForbiddenError} When either party is not listed on the contract.
+     */
     const reviewerParticipates = this.repository.verifyContractParticipation(
       contextId,
       reviewerId
@@ -81,12 +95,21 @@ export class ReputationService {
       throw new ForbiddenError('Only contract participants can submit ratings');
     }
 
-    // 4. Validate comment (defense-in-depth, in addition to Zod validation)
+    /**
+     * Guard 4 — Comment validation (defense-in-depth).
+     * Applied in addition to Zod validation at the route layer.
+     * Catches: over-length comments, whitespace-only comments, and spam
+     * (single character comprising > 50 % of the comment body).
+     * @throws {ValidationError} When the comment fails any content policy rule.
+     */
     if (comment) {
       this.validateComment(comment);
     }
 
-    // 5. Persist reputation entry
+    /**
+     * Guard 5 — Persist the reputation entry.
+     * Runs only after all guards have passed.
+     */
     const entry = this.repository.create({
       reviewerId,
       targetId,
@@ -95,7 +118,20 @@ export class ReputationService {
       contextId,
     });
 
-    // 6. AUDIT LOG (MANDATORY - no write without audit)
+    /**
+     * Guard 6 — Mandatory audit log.
+     * Every successful write MUST produce an immutable audit entry.
+     * The comment is stored as a SHA-256 hash to avoid leaking PII into the
+     * audit store; the plaintext is never logged.
+     *
+     * IMPORTANT: If audit logging fails the error is re-thrown so the caller
+     * receives a generic 'Failed to create audit trail' message.  At this point
+     * the DB row has already been persisted — callers that need strict
+     * atomicity must implement compensating logic (e.g. soft-delete the entry).
+     *
+     * @throws {Error} 'Failed to create audit trail. Rating not persisted.'
+     *                  when the audit store is unavailable.
+     */
     try {
       auditService.log({
         action: 'REPUTATION_UPDATED',
