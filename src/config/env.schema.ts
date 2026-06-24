@@ -43,7 +43,10 @@ export const envSchema = z.object({
 
   // Secrets
   JWT_SECRET: z.string().min(8, "JWT_SECRET must be at least 8 characters").optional(),
-
+  // Compliance audit HMAC secret – required for proof generation.
+  COMPLIANCE_AUDIT_SECRET: z.string()
+    .min(32, "COMPLIANCE_AUDIT_SECRET must be at least 32 characters")
+    .nonempty("COMPLIANCE_AUDIT_SECRET cannot be empty"),
   // Admin API Key Configuration
   ADMIN_API_KEY: z.string().optional(),
   ADMIN_API_KEY_SCOPES: z.string()
