@@ -174,7 +174,7 @@ export function isSafeUrl(urlString: string): boolean {
       }
 
       return !isPrivateHost(host);
-    } catch (error) {
+    } catch (_error) {
       return false;
     }
   }
@@ -194,7 +194,7 @@ export function isSafeUrl(urlString: string): boolean {
     }
 
     return !isPrivateHost(host);
-  } catch (error) {
+  } catch (_error) {
     return false;
   }
 }
