@@ -31,6 +31,7 @@
  */
 
 import { recordThrottled } from './webhookMetrics';
+import { Gauge } from 'prom-client';
 
 // ---------------------------------------------------------------------------
 // Configuration helpers
@@ -109,6 +110,7 @@ export class TokenBucketLimiter {
   private readonly capacity: number;
   private readonly refillRatePerSec: number;
   private readonly buckets: Map<string, BucketState> = new Map();
+  private samplingIntervalId: ReturnType<typeof setInterval> | null = null;
 
   /**
    * @param config - Parsed configuration.  Defaults to
@@ -173,6 +175,62 @@ export class TokenBucketLimiter {
    */
   public getQueueDepth(providerId: string): number {
     return this.getBucket(providerId).queue.length;
+  }
+
+  /**
+   * Start periodic sampling of token and queue-depth metrics.
+   *
+   * Samples all active provider buckets at the specified interval and updates
+   * the provided gauges. Sampling does not consume tokens and is designed to
+   * have minimal impact on the delivery hot path.
+   *
+   * @param tokenGauge - Gauge to record current token count per provider.
+   * @param queueDepthGauge - Gauge to record current queue depth per provider.
+   * @param intervalMs - Sampling interval in milliseconds. Recommended: 5000-15000ms.
+   * @returns A function to stop sampling.
+   */
+  public startMetricsSampling(
+    tokenGauge: Gauge<string>,
+    queueDepthGauge: Gauge<string>,
+    intervalMs: number = 10000,
+  ): () => void {
+    if (this.samplingIntervalId !== null) {
+      console.warn('[rateLimit] Metrics sampling already active, ignoring start request.');
+      return () => {};
+    }
+
+    const sample = () => {
+      for (const [providerId] of this.buckets) {
+        const redactedProviderId = redactId(providerId);
+        const tokens = this.getTokenCount(providerId);
+        const queueDepth = this.getQueueDepth(providerId);
+
+        tokenGauge.set({ provider_id: redactedProviderId }, tokens);
+        queueDepthGauge.set({ provider_id: redactedProviderId }, queueDepth);
+      }
+    };
+
+    // Initial sample
+    sample();
+
+    this.samplingIntervalId = setInterval(sample, intervalMs);
+
+    return () => {
+      if (this.samplingIntervalId !== null) {
+        clearInterval(this.samplingIntervalId);
+        this.samplingIntervalId = null;
+      }
+    };
+  }
+
+  /**
+   * Stop metrics sampling if active.
+   */
+  public stopMetricsSampling(): void {
+    if (this.samplingIntervalId !== null) {
+      clearInterval(this.samplingIntervalId);
+      this.samplingIntervalId = null;
+    }
   }
 
   // -------------------------------------------------------------------------
