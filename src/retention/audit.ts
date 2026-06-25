@@ -104,7 +104,8 @@ export class ComplianceAuditLogger {
     });
 
     // In production, use a secure key from environment variables
-    const secret = process.env.COMPLIANCE_AUDIT_SECRET || 'talenttrust-compliance-secret-key-2024';
+    const secret = process.env.COMPLIANCE_AUDIT_SECRET;
+    if (!secret) { throw new Error('COMPLIANCE_AUDIT_SECRET is required'); }
     
     return crypto
       .createHmac('sha256', secret)
