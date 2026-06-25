@@ -6,6 +6,8 @@ import { getDb } from '../db/database';
 import { validateSchema } from '../middleware/validate.middleware';
 import { createContractSchema, updateContractSchema } from '../modules/contracts/dto/contract.dto';
 import { eventIngestionService } from '../events/registry';
+import { requireAuth, requirePermission } from '../middleware/authorization';
+import type { AuthenticatedRequest } from '../lib/types';
 
 /**
  * Creates the contracts router with injected dependencies.
@@ -49,9 +51,6 @@ function createContractsRouter(): Router {
     controller.getContractById,
   );
 
-  router.get('/bounds', controller.getBounds);
-  router.get('/stats', controller.getContractStats);
-  router.get('/', controller.getContracts);
   router.get('/:id/history', async (req: Request, res: Response, next: NextFunction) => {
     try {
       const history = await eventIngestionService.getContractHistory(req.params.id);
@@ -60,7 +59,6 @@ function createContractsRouter(): Router {
       next(error);
     }
   });
-  router.get('/:id', controller.getContractById);
   router.post(
     '/',
     requireAuth,

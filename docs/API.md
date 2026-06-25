@@ -256,6 +256,68 @@ Retrieves global statistical bounds and limits for contracts.
 
 Retrieves contract system statistics (e.g., total active volume, total completed volume).
 
+#### Create Contract
+**POST** `/api/v1/contracts`
+
+Creates a new escrow contract.
+
+**Access**: Admin or Client (`Authorization: Bearer <jwt>`)
+
+**Request Body:**
+```json
+{
+  "title": "Escrow Contract Title",
+  "description": "Escrow contract detailed description",
+  "clientId": "00000000-0000-0000-0000-000000000001",
+  "freelancerId": "00000000-0000-0000-0000-000000000002",
+  "budget": 5000,
+  "milestones": [
+    {
+      "title": "Milestone 1",
+      "amount": 2500
+    },
+    {
+      "title": "Milestone 2",
+      "amount": 2500
+    }
+  ]
+}
+```
+
+**Response (201) - Created:**
+```json
+{
+  "status": "success",
+  "data": {
+    "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "title": "Escrow Contract Title",
+    "clientId": "00000000-0000-0000-0000-000000000001",
+    "freelancerId": "00000000-0000-0000-0000-000000000002",
+    "amount": 5000,
+    "status": "draft",
+    "version": 0,
+    "createdAt": "2024-01-15T10:00:00.000Z"
+  }
+}
+```
+
+**Validation and Bounds Check Errors:**
+- `400 Bad Request` — validation error. Triggered for invalid types, negative amounts, or if the contract budget exceeds the maximum permitted global contract amount limit.
+- `422 Unprocessable Entity` — contract bounds error. Triggered if the number of milestones exceeds the maximum global limit, or if the sum of milestone amounts does not match the contract's total budget.
+
+**Error Response (422) Example:**
+```json
+{
+  "status": "error",
+  "error": {
+    "code": "ContractBoundsError",
+    "message": "Milestone count (12) exceeds maximum limit (10).",
+    "requestId": "trace-id"
+  }
+}
+```
+
+
 #### Get Contract by ID
 **GET** `/api/v1/contracts/:id`
 

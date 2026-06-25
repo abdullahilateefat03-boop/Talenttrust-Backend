@@ -98,7 +98,7 @@ export function computeIdempotencyKey(
  * ```
  */
 export class IdempotencyStore {
-  private readonly db: typeof Database;
+  private readonly db: Database.Database;
   private readonly config: IdempotencyConfig;
 
   /**

@@ -15,7 +15,7 @@ function makeInput(overrides: Partial<CreateAuditEntryInput> = {}): CreateAuditE
 }
 
 describe('SqliteAuditRepository', () => {
-  let db: typeof Database;
+  let db: Database.Database;
   let repository: SqliteAuditRepository;
 
   beforeEach(() => {

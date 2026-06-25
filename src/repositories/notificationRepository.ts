@@ -12,7 +12,7 @@ interface NotificationRow {
 export class NotificationRepository {
   private db: Database;
 
-  constructor(db: typeof Database) {
+  constructor(db: Database) {
     this.db = db;
   }
 
