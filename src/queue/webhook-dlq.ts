@@ -85,7 +85,7 @@ function incrementDLQMetric(operation: DLQOperation): void {
 }
 
 class WebhookDLQStorage {
-  private db: BetterSqlite3.Database;
+  private db: ReturnType<typeof Database>;
   private config: DLQConfig;
 
   constructor(dbPath?: string, config: Partial<DLQConfig> = {}) {

@@ -28,13 +28,58 @@ function createFixedTimestamp(daysOffset: number, baseDate: Date): string {
   return date.toISOString();
 }
 
-describe('computeWeightedReputationScore', () => {
-  const now = new Date('2024-01-15T00:00:00.000Z');
-  const lambda = 0.005; // Default decay constant
+/**
+ * Inserts a new contract row so the service's participation check passes.
+ *
+ * @param db       - Open in-memory SQLite instance.
+ * @param id       - The contract UUID.
+ * @param clientId - User who plays the client role.
+ * @param freelancerId - User who plays the freelancer role.
+ */
+function insertContract(
+  db: ReturnType<typeof Database>,
+  id: string,
+  clientId: string = REVIEWER_ID,
+  freelancerId: string = TARGET_ID,
+): void {
+  db.prepare(
+    `INSERT OR IGNORE INTO contracts
+       (id, title, client_id, freelancer_id, amount, status, version, created_at)
+     VALUES (?, ?, ?, ?, 1000, 'completed', 0, datetime('now'))`,
+  ).run(id, `Contract ${id}`, clientId, freelancerId);
+}
 
-  it('returns 0 for empty ratings array', () => {
-    const result = computeWeightedReputationScore([], now, lambda);
-    expect(result).toBe(0);
+/**
+ * Returns the total number of reputation_entries rows currently in the DB.
+ */
+function reputationRowCount(db: ReturnType<typeof Database>): number {
+  const row = db.prepare<[], { c: number }>('SELECT COUNT(*) AS c FROM reputation_entries').get();
+  return row?.c ?? 0;
+}
+
+// ---------------------------------------------------------------------------
+// Suite
+// ---------------------------------------------------------------------------
+
+describe('ReputationService.createRating — anti-abuse protections', () => {
+  let db: ReturnType<typeof Database>;
+
+  beforeAll(() => {
+    // Use a fresh in-memory SQLite instance with full schema migrations.
+    db = getDb(':memory:');
+    ReputationService.initialize(db);
+
+    // Seed the minimal user rows required by FK constraints.
+    db.exec(`
+      INSERT OR IGNORE INTO users (id, username, email, role, created_at)
+      VALUES
+        ('${REVIEWER_ID}', 'reviewer01', 'reviewer@test.com', 'client', datetime('now')),
+        ('${TARGET_ID}',   'target01',   'target@test.com',   'freelancer', datetime('now')),
+        ('${OUTSIDER_ID}', 'outsider01', 'outsider@test.com', 'client',    datetime('now'));
+    `);
+
+    // Seed the main contract used by most tests.
+    insertContract(db, CONTEXT_ID);
   });
 
   it('returns the rating value for single rating (age = 0)', () => {

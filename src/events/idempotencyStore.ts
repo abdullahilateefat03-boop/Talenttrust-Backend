@@ -99,7 +99,7 @@ export function computeIdempotencyKey(
  * ```
  */
 export class IdempotencyStore {
-  private readonly db: BetterSqlite3.Database;
+  private readonly db: ReturnType<typeof Database>;
   private readonly config: IdempotencyConfig;
 
   /**
