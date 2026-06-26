@@ -1,5 +1,12 @@
 import { randomUUID } from 'crypto';
-import Database from "../db/betterSqlite3";
+// `import type` (not `import Database, ...`) because this module only
+// consumes a connection via its constructor; it never constructs one
+// itself. The wrapper exports `Database` as BOTH a constructor value
+// (default export) and a `BetterSqlite3.Database` type alias (named
+// export with the same name). Default-importing the value here would
+// make it dead-weight; importing only the named type alias keeps
+// runtime cost zero and intent unambiguous.
+import type { Database as DbInstance } from "../db/betterSqlite3";
 import { computeEntryHash, GENESIS_HASH } from './store';
 import type { AuditEntry, AuditQuery, CreateAuditEntryInput, IntegrityReport } from './types';
 import type { AuditLogRepository } from './repository';
@@ -37,7 +44,14 @@ function toAuditEntry(row: AuditRow): AuditEntry {
 }
 
 export class SqliteAuditRepository implements AuditLogRepository {
-  constructor(private readonly db: typeof Database) {
+  // We deliberately use the named `Database` type alias (resolves to
+  // `better-sqlite3.Database`, the instance type) instead of
+  // `typeof Database`. With the wrapper's namespace-import pattern,
+  // `typeof Database` collapses to the namespace-inherited
+  // `{ default: DatabaseConstructor }` shape and rejects the actual
+  // instance, silently masking the real typing bug. Don't revert to
+  // `typeof Database` without re-reading `src/db/betterSqlite3.ts`.
+  constructor(private readonly db: DbInstance) {
     this.initSchema();
   }
 
