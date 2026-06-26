@@ -132,6 +132,7 @@ ENABLE_PAYLOAD_INTEGRITY_CHECK=true
 MAX_EVENT_AGE_MS=86400000
 EVENT_BATCH_SIZE=100
 EVENT_TIMEOUT_MS=5000
+IDEMPOTENCY_TTL_MS=3600000
 ```
 
 For full configuration details, see [docs/backend/config.md](docs/backend/config.md).
@@ -250,6 +251,7 @@ All configuration is managed through `src/config/` and validated at startup usin
 | `DEBUG` | `false` | Enable/disable debug logging |
 | `DATABASE_URL` | *(optional)* | Database connection string |
 | `JWT_SECRET` | *(optional)* | Secret used for JWT signing (min 8 chars) |
+| `IDEMPOTENCY_TTL_MS` | `3600000` | Idempotency key TTL in ms (default 1 hour); after expiry keys are eligible for eviction and re-submission is processed fresh |
 | `STELLAR_HORIZON_URL` | `https://horizon-testnet.stellar.org` | Stellar Horizon API endpoint |
 | `STELLAR_NETWORK_PASSPHRASE` | `Test SDF Network ; September 2015` | Network passphrase for signing |
 | `SOROBAN_RPC_URL` | `https://soroban-testnet.stellar.org` | Soroban JSON-RPC endpoint |

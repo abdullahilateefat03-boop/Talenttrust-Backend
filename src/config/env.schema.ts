@@ -107,6 +107,11 @@ export const envSchema = z.object({
     .transform((val) => val ? val.split(',').map(p => p.trim()) : undefined)
     .pipe(z.array(z.string()).optional()),
 
+  IDEMPOTENCY_TTL_MS: z.string()
+    .optional()
+    .transform((val) => val === undefined ? undefined : parseInt(val, 10))
+    .pipe(z.number().int().positive().optional()),
+
   ROUTE_BODY_LIMITS: z.string()
     .optional()
     .refine(val => {
