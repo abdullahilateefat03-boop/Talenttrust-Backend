@@ -5,7 +5,7 @@ module.exports = {
     '/node_modules/',
     'queue-manager.test.ts',
     'queue-manager.dedupe.test.ts',
-    'reputation-recompute-processor.test.ts',
+    // 'reputation-recompute-processor.test.ts', — re-enabled: real paginated query
     'retry-manager.test.ts',
     'api/jobs.test',
     'tests/load',
@@ -30,7 +30,7 @@ module.exports = {
     'src/middleware/auth.test.ts',
     'src/rateLimit.integration.test.ts',
     'src/repositories/contracts.repository.test.ts',
-    'src/repositories/reputationRepository.test.ts',
+    // 'src/repositories/reputationRepository.test.ts', — re-enabled: getDistinctTargetIdPage coverage
     'src/routes/admin.routes.test.ts',
     'src/routes/reputation.api.test.ts',
     'src/services/contracts.service.test.ts',
