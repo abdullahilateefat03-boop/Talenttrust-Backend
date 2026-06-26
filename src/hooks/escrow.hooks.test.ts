@@ -1,3 +1,13 @@
+// Mock the notification service module before any imports resolve so that
+// the module-level `notificationService` singleton (which calls validateEnv()
+// and opens a SQLite connection) is never constructed during tests.
+jest.mock('../services/notification.service', () => ({
+  notificationService: {
+    sendEmail: jest.fn().mockResolvedValue({ success: true }),
+    sendWebNotification: jest.fn().mockResolvedValue({ success: true }),
+  },
+}));
+
 import { EscrowHooks, EscrowDispatchResult } from './escrow.hooks';
 import { KeyEscrowEvent } from '../types/notification.types';
 import { notificationService } from '../services/notification.service';
