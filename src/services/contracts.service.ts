@@ -33,8 +33,7 @@ export class ContractsService {
    * @deprecated Prefer {@link getContractsPage} for scalable access.
    * @returns Array of contract metadata.
    */
-  public async getAllContracts() {
-    return this.contracts;
+  /**
    * Retrieves all contracts from the repository.
    * @returns Array of contract metadata including version field.
    */
@@ -100,25 +99,7 @@ export class ContractsService {
     return { data: pageItems, nextCursor, hasNextPage, limit };
   }
 
-  /**
-   * Creates a new contract off-chain, preparing it for escrow deposit.
-   * Enforces milestone count and total amount caps before persisting.
-   * @param data The contract details conforming to CreateContractDto.
-   * @returns The newly created contract object.
-   * @throws ContractBoundsError if budget or milestone totals exceed policy limits.
-   */
-  public async createContract(data: CreateContractDto) {
-    const newContract = {
-      id: crypto.randomUUID(),
-      ...data,
-      status: 'PENDING',
-      createdAt: new Date().toISOString(),
-    };
 
-    this.contracts.push(newContract);
-
-    // Simulate notifying the Soroban service to prepare the transaction
-    await this.sorobanService.prepareEscrow(newContract.id, data.budget);
   public async createContract(data: CreateContractDto): Promise<Contract> {
     const boundsCheck = validateContractBounds(data.budget, data.milestones);
     if (!boundsCheck.valid) {

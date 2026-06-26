@@ -1,9 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import { ContractsService } from '../services/contracts.service';
-import { CreateContractDto } from '../modules/contracts/dto/contract.dto';
+import { CreateContractDto, UpdateContractDto } from '../modules/contracts/dto/contract.dto';
 import { parseLimit, decodeCursor } from '../contracts/cursor.repository';
 import { CURSOR_DEFAULT_LIMIT } from '../contracts/cursor.types';
-import { CreateContractDto, UpdateContractDto } from '../modules/contracts/dto/contract.dto';
+
 import { CONTRACT_BOUNDS, ContractBoundsError } from '../contracts/bounds';
 import { NotFoundError } from '../errors/appError';
 import { parsePaginationQuery, applyPagination } from '../utils/pagination';
@@ -42,45 +42,7 @@ export class ContractsController {
    * @param res - Express response.
    * @param next - Express next-error handler.
    */
-  public static async getContracts(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ): Promise<void> {
-    try {
-      // Validate limit and cursor up-front so we return 400 before hitting the DB
-      let limit: number;
-      try {
-        limit = parseLimit(req.query['limit']);
-      } catch (err) {
-        res.status(400).json({
-          status: 'error',
-          message: (err as Error).message,
-        });
-        return;
-      }
 
-      const rawCursor = req.query['cursor'];
-      if (rawCursor !== undefined && typeof rawCursor === 'string') {
-        // Validate cursor shape eagerly so we return 400 for garbage values
-        try {
-          decodeCursor(rawCursor);
-        } catch (err) {
-          res.status(400).json({
-            status: 'error',
-            message: (err as Error).message,
-          });
-          return;
-        }
-      }
-
-      const cursor =
-        typeof rawCursor === 'string' && rawCursor.length > 0
-          ? rawCursor
-          : undefined;
-
-      const page = await contractsService.getContractsPage({ limit, cursor });
-      res.status(200).json({ status: 'success', data: page });
   /**
    * @param service - Injected ContractsService instance
    */
@@ -134,11 +96,7 @@ export class ContractsController {
    * POST /api/v1/contracts
    * Create a new contract.
    */
-  public static async createContract(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ): Promise<void> {
+
   public async createContract(req: Request, res: Response, next: NextFunction) {
     try {
       const data: CreateContractDto = req.body;
