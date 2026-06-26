@@ -13,6 +13,7 @@
 
 import type { CursorPosition } from './cursor.types';
 import { CURSOR_MAX_LIMIT, CURSOR_DEFAULT_LIMIT } from './cursor.types';
+import { IndexerCursor, CursorUpdateResult, CursorResumeResult, CursorResumeRequest } from './cursor.types';
 
 /**
  * Encodes a {@link CursorPosition} into an opaque base-64 string suitable for
@@ -84,8 +85,6 @@ export function parseLimit(raw: unknown): number {
   }
   return n;
 }
-
-import { IndexerCursor, CursorUpdateResult, CursorResumeResult, CursorResumeRequest } from './cursor.types';
 
 /**
  * @notice Persistence interface for indexer cursors.

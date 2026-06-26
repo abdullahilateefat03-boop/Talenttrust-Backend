@@ -145,7 +145,7 @@ export const envSchema = z.object({
       .max(1, 'REPUTATION_DECAY_LAMBDA must be less than or equal to 1')),
 
   REPUTATION_SCORE_ALGORITHM_VERSION: z.string()
-    .default('exp-decay-v1'),
+    .default('exp-decay-v1')
 }).superRefine((obj, ctx) => {
     if (obj.NODE_ENV !== 'test') {
       if (!obj.JWT_SECRET) {

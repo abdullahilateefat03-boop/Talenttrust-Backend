@@ -96,8 +96,8 @@ export class TokenBucketLimiter {
    * @returns A promise that resolves when the caller may proceed with delivery.
    */
   public async acquireToken(providerId: string): Promise<void> {
+    this.refillBucket(providerId);
     const bucket = this.getBucket(providerId);
-    await this.store.consume(providerId, this.capacity, this.refillRatePerSec);
 
     if (bucket.tokens >= 1) {
       bucket.tokens -= 1;
@@ -125,10 +125,8 @@ export class TokenBucketLimiter {
    * @param providerId - Opaque provider identifier.
    */
   public getTokenCount(providerId: string): number | Promise<number> {
-    if (this.store instanceof MemoryBucketStore) {
-      return this.store.getTokensSync(providerId, this.capacity, this.refillRatePerSec);
-    }
-    return this.store.getTokens(providerId, this.capacity, this.refillRatePerSec);
+    this.refillBucket(providerId);
+    return this.getBucket(providerId).tokens;
   }
 
   /**
@@ -144,9 +142,7 @@ export class TokenBucketLimiter {
    * Close connections or clean up resources.
    */
   public async close(): Promise<void> {
-    if (this.store instanceof RedisBucketStore) {
-      await this.store.disconnect();
-    }
+    // No-op for in-memory store
   }
 
   /**
@@ -265,26 +261,13 @@ export class TokenBucketLimiter {
    * then re-schedule if the queue is still non-empty.
    */
   private async drainQueue(providerId: string): Promise<void> {
-    const bucket = this.getOrCreateBucket(providerId);
+    this.refillBucket(providerId);
+    const bucket = this.getBucket(providerId);
 
-    while (bucket.queue.length > 0) {
-      try {
-        const { allowed } = await this.store.consume(providerId, this.capacity, this.refillRatePerSec);
-        if (allowed) {
-          const waiter = bucket.queue.shift()!;
-          waiter.resolve();
-        } else {
-          break;
-        }
-      } catch (err) {
-        console.error(`[rateLimit] Redis store consume error in drainQueue:`, err);
-        // Fail all pending waiters for this provider
-        while (bucket.queue.length > 0) {
-          const waiter = bucket.queue.shift()!;
-          waiter.reject(err instanceof Error ? err : new Error(String(err)));
-        }
-        break;
-      }
+    while (bucket.queue.length > 0 && bucket.tokens >= 1) {
+      bucket.tokens -= 1;
+      const resolve = bucket.queue.shift()!;
+      resolve();
     }
     this.store.setTokenBucket(providerId, bucket);
 

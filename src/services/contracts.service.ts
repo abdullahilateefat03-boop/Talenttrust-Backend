@@ -25,6 +25,11 @@ export class ContractsService {
   }
 
   /**
+   * Retrieves all contracts.
+   * @deprecated Prefer {@link getContractsPage} for scalable access.
+   * @returns Array of contract metadata.
+   */
+  /**
    * Retrieves all contracts from the repository.
    * @returns Array of contract metadata including version field.
    */
@@ -90,13 +95,7 @@ export class ContractsService {
     return { data: pageItems, nextCursor, hasNextPage, limit };
   }
 
-  /**
-   * Creates a new contract off-chain, preparing it for escrow deposit.
-   * Enforces milestone count and total amount caps before persisting.
-   * @param data The contract details conforming to CreateContractDto.
-   * @returns The newly created contract object.
-   * @throws ContractBoundsError if budget or milestone totals exceed policy limits.
-   */
+
   public async createContract(data: CreateContractDto): Promise<Contract> {
     const boundsCheck = validateContractBounds(data.budget, data.milestones);
     if (!boundsCheck.valid) {

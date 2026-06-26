@@ -9,6 +9,7 @@ import {
 } from './cursor.repository';
 import { InMemoryCursorRepository } from './cursor.repository';
 import { CURSOR_MAX_LIMIT, CURSOR_DEFAULT_LIMIT } from './cursor.types';
+import { InMemoryCursorRepository } from './cursor.repository';
 
 describe('encodeCursor / decodeCursor', () => {
   const position = { createdAt: '2024-06-01T12:00:00.000Z', id: 'abc-123' };

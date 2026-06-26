@@ -86,8 +86,8 @@ const MIGRATIONS: Migration[] = [
       );
     `);
   },
-},
-{
+  },
+  {
     version: 4,
     name: "create_reputation_entries",
     checksumSource: [
@@ -116,7 +116,7 @@ const MIGRATIONS: Migration[] = [
       `);
     },
   },
-{
+  {
   version: 5,
   name: "create_transactions_table",
   checksumSource: [
