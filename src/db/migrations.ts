@@ -200,6 +200,21 @@ MIGRATIONS.push({
   },
 });
 
+// Version 8: add started_at to transactions table
+MIGRATIONS.push({
+  version: 8,
+  name: "add_started_at_to_transactions",
+  up: (db) => {
+    // Check if the column already exists to prevent errors during repeated migrations
+    const columns = db.pragma("table_info(transactions)") as Array<{ name: string }>;
+    const hasStartedAt = columns.some((column) => column.name === "started_at");
+
+    if (!hasStartedAt) {
+      db.exec("ALTER TABLE transactions ADD COLUMN started_at TEXT");
+    }
+  },
+});
+
 function ensureMigrationTable(db: Database.Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_version (

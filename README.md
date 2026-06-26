@@ -469,6 +469,16 @@ For more information, see the [Secrets Handling Documentation](docs/backend/secr
 MIT
 
 ## -------------- Utilities  ------------
+
+## Transaction Poller
+
+The `TransactionPoller` service manages blockchain transaction confirmations using an exponential backoff strategy.
+
+### Features
+- **Configurable Retries**: Set `maxRetries` to limit the number of backoff polling attempts.
+- **Duration Ceiling**: An absolute wall-clock duration limit (`maxTotalDurationMs`) can be set as a circuit breaker. If the transaction takes longer than this ceiling, polling is halted and the transaction transitions to `TIMEOUT`. This acts as an absolute guard and takes precedence over `maxRetries` if reached first.
+- **Idempotent Polling**: Safely restarts after an app crash without duplicating tracking logic.
+
 ## Retry & Backoff Utilities
 
 Reusable retry policies for handling transient failures, located in `src/utils/retry.ts`.

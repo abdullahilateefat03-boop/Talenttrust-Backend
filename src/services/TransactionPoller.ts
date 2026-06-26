@@ -8,6 +8,14 @@ export interface IBlockchainProvider {
   getTransactionReceipt(hash: string): Promise<any>;
 }
 
+export interface IClock {
+  now(): number;
+}
+
+export const SystemClock: IClock = {
+  now: () => Date.now(),
+};
+
 /**
  * Monitors blockchain transaction status using an exponential backoff strategy.
  * Designed to ensure eventual consistency and respect RPC rate limits during peak network congestion.
@@ -16,16 +24,34 @@ export class TransactionPoller {
   private readonly provider: IBlockchainProvider;
   private readonly maxRetries: number;
   private readonly initialDelay: number;
+  private readonly maxTotalDurationMs?: number;
+  private readonly clock: IClock;
 
   /**
    * @param provider The blockchain provider instance.
    * @param maxRetries Maximum polling attempts before timeout (default: 5).
    * @param initialDelay Starting interval in milliseconds for backoff (default: 1000ms).
+   * @param maxTotalDurationMs Optional absolute maximum duration in milliseconds before timing out.
+   *                           If provided, acts as an additional guard alongside maxRetries;
+   *                           whichever threshold is reached first will trigger a TIMEOUT.
+   * @param clock Optional injectable clock for testing (default: SystemClock).
    */
-  constructor(provider: IBlockchainProvider, maxRetries: number = 5, initialDelay: number = 1000) {
+  constructor(
+    provider: IBlockchainProvider,
+    maxRetries: number = 5,
+    initialDelay: number = 1000,
+    maxTotalDurationMs?: number,
+    clock: IClock = SystemClock
+  ) {
+    if (maxTotalDurationMs !== undefined && (isNaN(maxTotalDurationMs) || maxTotalDurationMs <= 0 || maxTotalDurationMs === Infinity)) {
+      throw new Error('maxTotalDurationMs must be a positive finite number to prevent silently disabling timeouts');
+    }
+    
     this.provider = provider;
     this.maxRetries = maxRetries;
     this.initialDelay = initialDelay;
+    this.maxTotalDurationMs = maxTotalDurationMs;
+    this.clock = clock;
   }
 
   /**
@@ -40,7 +66,11 @@ export class TransactionPoller {
         hash: txHash,
         status: TransactionStatus.PENDING,
         retryCount: 0,
+        startedAt: new Date(this.clock.now()),
       };
+      transactionsDb.set(txHash, transaction);
+    } else if (!transaction.startedAt) {
+      transaction.startedAt = new Date(this.clock.now());
       transactionsDb.set(txHash, transaction);
     }
 
@@ -84,9 +114,20 @@ export class TransactionPoller {
     // Circuit breaker for long-running pending transactions
     if (transaction.retryCount >= this.maxRetries) {
       transaction.status = TransactionStatus.TIMEOUT;
-      transaction.lastCheckedAt = new Date();
+      transaction.lastCheckedAt = new Date(this.clock.now());
       transactionsDb.set(txHash, transaction);
       return;
+    }
+
+    // Circuit breaker for absolute duration ceiling
+    if (this.maxTotalDurationMs !== undefined && transaction.startedAt) {
+      const elapsedMs = this.clock.now() - transaction.startedAt.getTime();
+      if (elapsedMs >= this.maxTotalDurationMs) {
+        transaction.status = TransactionStatus.TIMEOUT;
+        transaction.lastCheckedAt = new Date(this.clock.now());
+        transactionsDb.set(txHash, transaction);
+        return;
+      }
     }
 
     try {
@@ -96,7 +137,7 @@ export class TransactionPoller {
         // Map common blockchain status codes (1: Success, 0: Reverted)
         transaction.status = receipt.status === 1 ? TransactionStatus.SUCCESS : TransactionStatus.FAILED;
         transaction.receipt = receipt;
-        transaction.lastCheckedAt = new Date();
+        transaction.lastCheckedAt = new Date(this.clock.now());
         transactionsDb.set(txHash, transaction);
         return;
       }
@@ -106,7 +147,7 @@ export class TransactionPoller {
     }
 
     transaction.retryCount++;
-    transaction.lastCheckedAt = new Date();
+    transaction.lastCheckedAt = new Date(this.clock.now());
     transactionsDb.set(txHash, transaction);
 
     const delay = calculateDelay(transaction.retryCount - 1, this.initialDelay, Infinity, true);
