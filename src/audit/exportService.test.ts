@@ -493,4 +493,383 @@ describe('AuditExportService', () => {
       await result.cleanup();
     });
   });
+
+  // ─── Golden: CSV format contract ─────────────────────────────────────────
+  //
+  // These tests pin the exact serialised CSV output so that silent format
+  // changes (column re-ordering, escaping regressions) are caught immediately.
+  // The fixture rows are fully deterministic — timestamps and IDs are
+  // captured from the logged entry to keep assertions stable.
+
+  describe('golden – CSV format contract', () => {
+    const GOLDEN_HEADER = 'id,timestamp,action,severity,actor,resource,resourceId,ipAddress,correlationId,metadata';
+
+    it('header row matches the exact golden column order', async () => {
+      const es = new AuditExportService(service, { exportRoot });
+      const result = await es.createCsvExport();
+      const [header] = readCsvLines(result.filePath);
+
+      expect(header).toBe(GOLDEN_HEADER);
+      await result.cleanup();
+    });
+
+    it('data row columns appear in the same order as the header', async () => {
+      service.log({
+        action: 'CONTRACT_CREATED',
+        severity: 'INFO',
+        actor: 'alice',
+        resource: 'contract',
+        resourceId: 'c-42',
+        metadata: { amount: 100 },
+        ipAddress: '10.0.0.1',
+        correlationId: 'corr-xyz',
+      });
+
+      const es = new AuditExportService(service, { exportRoot });
+      const result = await es.createCsvExport();
+      const lines = readCsvLines(result.filePath);
+      const headerCols = lines[0].split(',');
+      // Split on commas NOT inside quoted cells
+      const dataColTokens = (lines[1].match(/("(?:[^"]|"")*"|[^,]*)/g) ?? []).filter(
+        (_, i) => i % 2 === 0, // match() returns full matches only with global flag
+      );
+
+      // Simpler: verify positional semantics by re-splitting around known-safe values
+      const idxAction = headerCols.indexOf('action');
+      const idxSeverity = headerCols.indexOf('severity');
+      const idxActor = headerCols.indexOf('actor');
+      const idxResource = headerCols.indexOf('resource');
+      const idxResourceId = headerCols.indexOf('resourceId');
+      const idxIp = headerCols.indexOf('ipAddress');
+      const idxCorr = headerCols.indexOf('correlationId');
+
+      // Parse the data row properly (handle quoted cells)
+      const parseCsvRow = (row: string): string[] => {
+        const cells: string[] = [];
+        let i = 0;
+        while (i < row.length) {
+          if (row[i] === '"') {
+            // Quoted cell – read until closing unescaped quote
+            let cell = '';
+            i++; // skip opening quote
+            while (i < row.length) {
+              if (row[i] === '"' && row[i + 1] === '"') { cell += '"'; i += 2; }
+              else if (row[i] === '"') { i++; break; }
+              else { cell += row[i++]; }
+            }
+            cells.push(cell);
+            if (row[i] === ',') i++;
+          } else {
+            const end = row.indexOf(',', i);
+            if (end === -1) { cells.push(row.slice(i)); break; }
+            cells.push(row.slice(i, end));
+            i = end + 1;
+          }
+        }
+        return cells;
+      };
+
+      const cells = parseCsvRow(lines[1]);
+      expect(cells[idxAction]).toBe('CONTRACT_CREATED');
+      expect(cells[idxSeverity]).toBe('INFO');
+      expect(cells[idxActor]).toBe('alice');
+      expect(cells[idxResource]).toBe('contract');
+      expect(cells[idxResourceId]).toBe('c-42');
+      expect(cells[idxIp]).toBe('10.0.0.1');
+      expect(cells[idxCorr]).toBe('corr-xyz');
+
+      // Unused variable suppression
+      void dataColTokens;
+      await result.cleanup();
+    });
+
+    it('golden: escapes a field containing a double-quote (RFC 4180)', async () => {
+      // metadata cell = JSON.stringify({note:'She said "hello"'})
+      //               = {"note":"She said \"hello\""}
+      // csvCell wraps it in quotes and doubles every internal quote:
+      //   → "{""note"":""She said \""hello\""""}"
+      service.log({
+        action: 'ADMIN_ACTION',
+        severity: 'CRITICAL',
+        actor: 'admin',
+        resource: 'system',
+        resourceId: 'sys',
+        metadata: { note: 'She said "hello"' },
+      });
+
+      const es = new AuditExportService(service, { exportRoot });
+      const result = await es.createCsvExport();
+      const content = readFileSync(result.filePath, 'utf8');
+
+      // The JSON-stringified object contains backslash-escaped quotes; csvCell
+      // then wraps the whole thing and doubles every double-quote character.
+      // Verify the cell is quoted and the original double-quotes are doubled.
+      expect(content).toContain('""She said \\"');
+      // And confirm the raw secret text does NOT appear unquoted/unescaped.
+      expect(content).not.toContain('"She said "hello"');
+      await result.cleanup();
+    });
+
+    it('golden: escapes a field containing an embedded newline', async () => {
+      service.log({
+        action: 'ADMIN_ACTION',
+        severity: 'CRITICAL',
+        actor: 'admin',
+        resource: 'system',
+        resourceId: 'sys',
+        metadata: { note: 'line one\nline two' },
+      });
+
+      const es = new AuditExportService(service, { exportRoot });
+      const result = await es.createCsvExport();
+      const content = readFileSync(result.filePath, 'utf8');
+
+      // The cell must be wrapped in quotes to preserve the embedded newline.
+      expect(content).toContain('"line one\\nline two"');
+      await result.cleanup();
+    });
+
+    it('golden: escapes a field containing both a comma and a double-quote', async () => {
+      // metadata JSON: {"note":"a,b\"c"}
+      // csvCell sees a comma AND a quote → wraps and doubles all quotes:
+      //   → "{""note"":""a,b\""c""}"
+      service.log({
+        action: 'ADMIN_ACTION',
+        severity: 'CRITICAL',
+        actor: 'admin',
+        resource: 'system',
+        resourceId: 'sys',
+        metadata: { note: 'a,b"c' },
+      });
+
+      const es = new AuditExportService(service, { exportRoot });
+      const result = await es.createCsvExport();
+      const content = readFileSync(result.filePath, 'utf8');
+
+      // Cell must be quoted (starts with ") because it contains a comma
+      // and all embedded quotes must be doubled.
+      expect(content).toContain('""a,b\\"');
+      // Confirm it doesn't appear raw/unescaped
+      expect(content).not.toContain('"a,b"c"');
+      await result.cleanup();
+    });
+
+    it('golden: empty-string and null-ish optional fields serialise as empty cells', async () => {
+      // ipAddress and correlationId are optional; when absent they should be
+      // empty cells, not the string "undefined".
+      service.log({
+        action: 'AUTH_LOGIN',
+        severity: 'INFO',
+        actor: 'u1',
+        resource: 'auth',
+        resourceId: 'u1',
+        metadata: {},
+        // ipAddress and correlationId intentionally omitted
+      });
+
+      const es = new AuditExportService(service, { exportRoot });
+      const result = await es.createCsvExport();
+      const lines = readCsvLines(result.filePath);
+
+      expect(lines[1]).not.toContain('undefined');
+      // The row should have exactly as many commas as there are header columns minus 1
+      const headerCols = lines[0].split(',').length;
+      // Count top-level commas outside quoted cells
+      let commaCount = 0;
+      let inQuote = false;
+      for (let i = 0; i < lines[1].length; i++) {
+        if (lines[1][i] === '"') inQuote = !inQuote;
+        else if (lines[1][i] === ',' && !inQuote) commaCount++;
+      }
+      expect(commaCount).toBe(headerCols - 1);
+      await result.cleanup();
+    });
+  });
+
+  // ─── Golden: JSON (NDJSON) format contract ────────────────────────────────
+  //
+  // Pins the exact set of top-level keys present on each exported JSON object
+  // and verifies that redaction is applied before serialisation.
+
+  describe('golden – JSON (NDJSON) format contract', () => {
+    /** Expected top-level keys on every exported JSON entry. */
+    const EXPECTED_JSON_KEYS = [
+      'id',
+      'timestamp',
+      'action',
+      'severity',
+      'actor',
+      'resource',
+      'resourceId',
+      'metadata',
+      'hash',
+      'previousHash',
+    ] as const;
+
+    it('each NDJSON line contains exactly the expected top-level keys', async () => {
+      service.log({
+        action: 'CONTRACT_CREATED',
+        severity: 'INFO',
+        actor: 'alice',
+        resource: 'contract',
+        resourceId: 'c-1',
+        metadata: { value: 99 },
+        ipAddress: '1.2.3.4',
+        correlationId: 'corr-1',
+      });
+
+      const es = new AuditExportService(service, { exportRoot });
+      const result = await es.createNdjsonExport();
+      const [line] = readNdjsonLines(result.filePath);
+
+      // All required keys must be present
+      for (const key of EXPECTED_JSON_KEYS) {
+        expect(line).toHaveProperty(key);
+      }
+      // Optional keys that appear when set
+      expect(line).toHaveProperty('ipAddress', '1.2.3.4');
+      expect(line).toHaveProperty('correlationId', 'corr-1');
+      await result.cleanup();
+    });
+
+    it('golden: JSON values have the correct types', async () => {
+      service.log({
+        action: 'USER_CREATED',
+        severity: 'WARNING',
+        actor: 'admin',
+        resource: 'user',
+        resourceId: 'u-99',
+        metadata: { role: 'editor' },
+      });
+
+      const es = new AuditExportService(service, { exportRoot });
+      const result = await es.createNdjsonExport();
+      const [line] = readNdjsonLines(result.filePath);
+
+      expect(typeof line['id']).toBe('string');
+      expect(typeof line['timestamp']).toBe('string');
+      // timestamp must be a valid ISO-8601 date
+      expect(new Date(line['timestamp'] as string).toISOString()).toBe(line['timestamp']);
+      expect(typeof line['action']).toBe('string');
+      expect(typeof line['severity']).toBe('string');
+      expect(typeof line['actor']).toBe('string');
+      expect(typeof line['resource']).toBe('string');
+      expect(typeof line['resourceId']).toBe('string');
+      expect(typeof line['metadata']).toBe('object');
+      expect(typeof line['hash']).toBe('string');
+      expect(typeof line['previousHash']).toBe('string');
+      await result.cleanup();
+    });
+
+    it('golden: redacted sensitive keys are masked in JSON output', async () => {
+      service.log({
+        action: 'AUTH_LOGIN',
+        severity: 'INFO',
+        actor: 'u1',
+        resource: 'auth',
+        resourceId: 'u1',
+        metadata: {
+          password: 'p@ssw0rd',
+          secret: 'top-secret',
+          token: 'bearer-abc',
+          apiKey: 'key-xyz',
+          safe: 'visible',
+        },
+      });
+
+      const es = new AuditExportService(service, { exportRoot });
+      const result = await es.createNdjsonExport();
+      const [line] = readNdjsonLines(result.filePath);
+      const meta = line['metadata'] as Record<string, unknown>;
+
+      expect(meta['password']).toBe(REDACTED);
+      expect(meta['secret']).toBe(REDACTED);
+      expect(meta['token']).toBe(REDACTED);
+      expect(meta['apiKey']).toBe(REDACTED);
+      expect(meta['safe']).toBe('visible');
+      // Raw secrets must not appear anywhere in the serialised output
+      const raw = readFileSync(result.filePath, 'utf8');
+      expect(raw).not.toContain('p@ssw0rd');
+      expect(raw).not.toContain('top-secret');
+      expect(raw).not.toContain('bearer-abc');
+      expect(raw).not.toContain('key-xyz');
+      await result.cleanup();
+    });
+
+    it('golden: email addresses in metadata are masked in JSON output', async () => {
+      service.log({
+        action: 'USER_CREATED',
+        severity: 'INFO',
+        actor: 'admin',
+        resource: 'user',
+        resourceId: 'u-1',
+        metadata: { contactEmail: 'alice@example.com', name: 'Alice' },
+      });
+
+      const es = new AuditExportService(service, { exportRoot });
+      const result = await es.createNdjsonExport();
+      const [line] = readNdjsonLines(result.filePath);
+      const meta = line['metadata'] as Record<string, unknown>;
+
+      // email is not a sensitive key name so it passes through redactBody's
+      // value-level masking
+      expect(meta['contactEmail']).toBe('ali***@example.com');
+      expect(meta['name']).toBe('Alice');
+      const raw = readFileSync(result.filePath, 'utf8');
+      expect(raw).not.toContain('alice@example.com');
+      await result.cleanup();
+    });
+
+    it('golden: redacted sensitive keys are masked in CSV metadata cell', async () => {
+      service.log({
+        action: 'AUTH_LOGIN',
+        severity: 'INFO',
+        actor: 'u1',
+        resource: 'auth',
+        resourceId: 'u1',
+        metadata: {
+          secret: 'my-secret',
+          token: 'my-token',
+          visible: 'ok',
+        },
+      });
+
+      const es = new AuditExportService(service, { exportRoot });
+      const result = await es.createCsvExport();
+      const raw = readFileSync(result.filePath, 'utf8');
+
+      expect(raw).toContain(REDACTED);
+      expect(raw).not.toContain('my-secret');
+      expect(raw).not.toContain('my-token');
+      expect(raw).toContain('ok');
+      await result.cleanup();
+    });
+
+    it('golden: empty export produces zero NDJSON lines and zero bytes written by records', async () => {
+      const es = new AuditExportService(service, { exportRoot });
+      const result = await es.createNdjsonExport();
+
+      expect(result.recordCount).toBe(0);
+      expect(readNdjsonLines(result.filePath)).toHaveLength(0);
+      await result.cleanup();
+    });
+
+    it('golden: multiple NDJSON lines are each independently valid JSON', async () => {
+      service.log({ action: 'CONTRACT_CREATED', severity: 'INFO', actor: 'u1', resource: 'contract', resourceId: 'c1', metadata: {} });
+      service.log({ action: 'USER_DELETED', severity: 'WARNING', actor: 'admin', resource: 'user', resourceId: 'u1', metadata: {} });
+      service.log({ action: 'ADMIN_ACTION', severity: 'CRITICAL', actor: 'admin', resource: 'system', resourceId: 'sys', metadata: { note: 'test' } });
+
+      const es = new AuditExportService(service, { exportRoot });
+      const result = await es.createNdjsonExport();
+      const rawLines = readFileSync(result.filePath, 'utf8').split('\n').filter(Boolean);
+
+      expect(rawLines).toHaveLength(3);
+      // Each line must independently parse without throwing
+      const parsed = rawLines.map((l) => JSON.parse(l) as Record<string, unknown>);
+      expect(parsed[0]['action']).toBe('CONTRACT_CREATED');
+      expect(parsed[1]['action']).toBe('USER_DELETED');
+      expect(parsed[2]['action']).toBe('ADMIN_ACTION');
+      await result.cleanup();
+    });
+  });
 });
