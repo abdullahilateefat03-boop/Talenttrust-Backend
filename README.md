@@ -65,6 +65,30 @@ All handled errors return:
 - `503` for expected dependency outages (`dependency_unavailable`)
 - `500` for unexpected failures (`internal_error`)
 
+### Error Codes
+
+Error `code` values are stable machine-readable API contract strings. Clients may branch on them, and new codes should be appended without renaming or removing existing values.
+
+| Code | Meaning |
+|---|---|
+| `bad_request` | The request could not be processed. |
+| `conflict` | The request conflicts with the current resource state. |
+| `contract_metadata_mismatch` | Contract metadata failed the pinned-value check. |
+| `dependency_unavailable` | A required upstream service is temporarily unavailable. |
+| `ERR_CONFLICT` | Optimistic concurrency version conflict. |
+| `ERR_INVALID_VERSION` | Update version is not a non-negative integer. |
+| `ERR_MISSING_VERSION` | Update version field is missing. |
+| `forbidden` | The authenticated user is not permitted to perform the action. |
+| `internal_error` | An unexpected error occurred. |
+| `invalid_json` | Request body JSON is malformed. |
+| `invalid_webhook_signature` | Webhook signature verification failed. |
+| `not_found` | The requested resource was not found. |
+| `payload_too_large` | Request payload exceeds the configured limit. |
+| `rate_limited` | Too many requests were sent in the allowed window. |
+| `unauthorized` | Authentication is required or invalid. |
+| `unsupported_media_type` | Request content type is unsupported. |
+| `validation_error` | Request or business-rule validation failed. |
+
 Detailed notes are in `docs/backend/error-handling.md`.
 
 ## Contract Event Processing
