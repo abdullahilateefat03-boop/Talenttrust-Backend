@@ -136,61 +136,44 @@ EVENT_TIMEOUT_MS=5000
 
 For full configuration details, see [docs/backend/config.md](docs/backend/config.md).
 
-## SLO Runtime Evaluation
+## Audit Log Export
 
-The backend evaluates Service Level Objectives (SLOs) at runtime by comparing
-live Prometheus metrics against the targets defined in
-`src/operations/service-objectives.ts`.
+The audit export endpoint streams compliance exports as NDJSON or CSV without loading the full table into memory.
 
-### How it works
+### Endpoint
 
-1. **`evaluateObjectives(register, objectives?)`** — reads `http_requests_total`
-   and `http_request_duration_seconds` from the application's prom-client
-   `Registry`, computes aggregate observed values (success rate, p95/p99
-   latency), and produces a compliance report for each objective.
-
-2. **`readObservedMetrics(register)`** — a lightweight read-only function the
-   health/observability layer can call to get a raw metrics snapshot without
-   objective comparisons.
-
-### Compliance report
-
-Each report has the shape:
-
-| Field | Description |
-|---|---|
-| `objectiveKey` | Logical name (e.g. `"healthCheck"`) |
-| `objective` | The full objective definition with targets |
-| `observed` | Observed `successRatePercent`, `latencyP95Ms`, `latencyP99Ms` |
-| `breaches` | Per-dimension boolean (`successRate`, `latencyP95`, `latencyP99`) |
-| `breached` | `true` if any dimension is in breach |
-
-### Edge-case handling
-
-- **Missing metric series** — returns `null` observed values, no breach
-- **Zero observations** — returns `null` latency, no breach
-- **Single observation** — percentiles are skipped (too few), success rate
-  still reports
-- **Exactly-at-threshold** — `>=` / `<=` semantics: meeting the target is
-  *not* a breach
-
-### Usage example
-
-```typescript
-import { evaluateObjectives } from './operations/service-objectives';
-import { metricsService } from './observability/metrics-service';
-
-const reports = await evaluateObjectives(metricsService['register']);
-
-for (const r of reports) {
-  if (r.breached) {
-    console.warn(`SLO breached for ${r.objectiveKey}:`, r.breaches);
-  }
-}
+```
+GET /api/v1/audit/export
 ```
 
-SLO definitions are maintained in `src/operations/service-objectives.ts`.
-See [docs/backend/SLA_SLO.md](docs/backend/SLA_SLO.md) for full reference.
+Requires `admin` or `auditor` role. Returns a streamed file attachment.
+
+### Query Parameters
+
+| Parameter    | Type   | Description                                              |
+|--------------|--------|----------------------------------------------------------|
+| `from`       | ISO-8601 | Start of time range (inclusive). e.g. `2024-01-01T00:00:00.000Z` |
+| `to`         | ISO-8601 | End of time range (inclusive).                          |
+| `action`     | string | Filter by event type (e.g. `CONTRACT_CREATED`).          |
+| `severity`   | string | Filter by severity: `INFO`, `WARNING`, or `CRITICAL`.    |
+| `actor`      | string | Filter by actor ID.                                      |
+| `resource`   | string | Filter by resource type (e.g. `contract`, `user`).       |
+| `resourceId` | string | Filter by resource instance ID.                          |
+
+All parameters are optional. Omitting them exports all records.
+
+### Output formats
+
+- **NDJSON** (default) — one JSON object per line, `Content-Type: application/x-ndjson`
+- **CSV** — header row + one data row per entry, columns: `id,timestamp,action,severity,actor,resource,resourceId,ipAddress,correlationId,metadata`
+
+### Memory safety
+
+Rows are fetched via a SQLite cursor and piped to a temp file in configurable batch sizes (default 500). The response is then streamed from the temp file. Peak heap usage is proportional to one batch, not the total result set.
+
+### Redaction
+
+All sensitive metadata fields (`password`, `token`, `secret`, `credential`, `apikey`, `api_key`, `private`) are replaced with `[REDACTED]` and email addresses are partially masked before the data reaches the export file.
 
 ## Documentation
 

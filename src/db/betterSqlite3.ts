@@ -232,28 +232,13 @@ try {
 
   class MockDatabase {
     open: boolean;
-    state: Record<string, any[]> = {};
+    state: Record<string, any[]>;
     private _pragmaValues: Record<string, any> = {};
     private _state: Record<string, any[]>;
 
     constructor(_path: string) {
       this.open = true;
-      const path = _path === ':memory:' || !_path ? '_memory_' : _path;
-      let state = dbPathToState.get(path);
-      if (!state) {
-        state = {
-          users: [],
-          contracts: [],
-          reputation_entries: [],
-          transactions: [],
-          webhook_dlq: [],
-          deployment_history: [],
-          idempotency_store: [],
-          audit_log_entries: [],
-        };
-        dbPathToState.set(path, state);
-      }
-      this._state = state;
+      this.state = getDbState(_path);
     }
 
     pragma(stmt: string, ..._args: any[]) {
