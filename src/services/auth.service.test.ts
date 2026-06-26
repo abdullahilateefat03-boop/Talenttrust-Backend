@@ -6,9 +6,6 @@
  * - Anti-enumeration (uniform error messages)
  * - Refresh token rotation (validation, revocation, reuse prevention)
  * - Security properties (no logging of secrets, no plaintext tokens)
- *
- * NOTE: These tests use mocked database calls to avoid dependency on the  
- * database driver. Auth logic is tested thoroughly regardless of persistence layer.
  */
 
 import { AuthService } from "./auth.service";
@@ -24,96 +21,38 @@ beforeAll(() => {
   process.env.JWT_SECRET = TEST_JWT_SECRET;
 });
 
-// Helper function to mock database behavior
-function createMockDb(): Database.Database {
-  const users: Map<string, any> = new Map();
+// Create real in-memory SQLite database with proper schema
+function createDb(): Database.Database {
+  const db = new Database(":memory:");
 
-  return {
-    prepare: (sql: string) => {
-      const upperSql = sql.toUpperCase();
+  // Create users table with all required columns matching migration version 7
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id              TEXT    PRIMARY KEY,
+      username        TEXT    NOT NULL UNIQUE,
+      email           TEXT    NOT NULL UNIQUE,
+      role            TEXT    NOT NULL DEFAULT 'client'
+                              CHECK (role IN ('client', 'freelancer', 'both')),
+      password_hash   TEXT,
+      refresh_token_hash TEXT,
+      created_at      TEXT    NOT NULL
+    )
+  `);
 
-      if (upperSql.includes("SELECT id FROM users WHERE email")) {
-        return {
-          get: (email: string) => {
-            const normalized = email.toLowerCase();
-            for (const [, user] of users) {
-              if (user.email === normalized) {
-                return { id: user.id };
-              }
-            }
-            return undefined;
-          },
-        } as any;
-      }
-
-      if (upperSql.includes("SELECT id, username, email, role, password_hash, refresh_token_hash FROM users WHERE email")) {
-        return {
-          get: (email: string) => {
-            const normalized = email.toLowerCase();
-            for (const [, user] of users) {
-              if (user.email === normalized) {
-                return user;
-              }
-            }
-            return undefined;
-          },
-        } as any;
-      }
-
-      if (upperSql.includes("SELECT id, email, role, refresh_token_hash FROM users WHERE id")) {
-        return {
-          get: (id: string) => {
-            return users.get(id);
-          },
-        } as any;
-      }
-
-      if (upperSql.includes("INSERT INTO users")) {
-        return {
-          run: (id: string, username: string, email: string, role: string, passwordHash: string, createdAt: string) => {
-            const normalized = email.toLowerCase();
-            users.set(id, {
-              id,
-              username,
-              email: normalized,
-              role,
-              password_hash: passwordHash,
-              refresh_token_hash: null,
-              created_at: createdAt,
-            });
-            return { lastInsertRowid: 1, changes: 1 };
-          },
-        } as any;
-      }
-
-      if (upperSql.includes("UPDATE users SET refresh_token_hash")) {
-        return {
-          run: (tokenHash: string, id: string) => {
-            const user = users.get(id);
-            if (user) {
-              user.refresh_token_hash = tokenHash;
-            }
-            return { changes: user ? 1 : 0 };
-          },
-        } as any;
-      }
-
-      return {
-        get: (...args: any[]) => undefined,
-        run: (...args: any[]) => ({ changes: 0 }),
-        all: (...args: any[]) => [],
-      } as any;
-    },
-  } as unknown as Database.Database;
+  return db;
 }
 
 describe("AuthService — password hashing with scrypt", () => {
+  let db: Database.Database;
   let authService: AuthService;
-  let mockDb: Partial<Database.Database>;
 
   beforeEach(() => {
-    mockDb = createMockDb();
-    authService = new AuthService(mockDb as Database.Database);
+    db = createDb();
+    authService = new AuthService(db);
+  });
+
+  afterEach(() => {
+    db.close();
   });
 
   it("stores non-plaintext passwords and allows successful login", async () => {
@@ -199,10 +138,16 @@ describe("AuthService — password hashing with scrypt", () => {
 });
 
 describe("AuthService — anti-enumeration (uniform error contract)", () => {
+  let db: Database.Database;
   let authService: AuthService;
 
   beforeEach(() => {
-    authService = new AuthService(createMockDb() as Database.Database);
+    db = createDb();
+    authService = new AuthService(db);
+  });
+
+  afterEach(() => {
+    db.close();
   });
 
   it("returns generic error message that does not reveal user existence", async () => {
@@ -249,10 +194,16 @@ describe("AuthService — anti-enumeration (uniform error contract)", () => {
 });
 
 describe("AuthService — refresh token rotation", () => {
+  let db: Database.Database;
   let authService: AuthService;
 
   beforeEach(() => {
-    authService = new AuthService(createMockDb() as Database.Database);
+    db = createDb();
+    authService = new AuthService(db);
+  });
+
+  afterEach(() => {
+    db.close();
   });
 
   it("issues access and refresh tokens on registration", async () => {
@@ -367,10 +318,16 @@ describe("AuthService — refresh token rotation", () => {
 });
 
 describe("AuthService — security properties", () => {
+  let db: Database.Database;
   let authService: AuthService;
 
   beforeEach(() => {
-    authService = new AuthService(createMockDb() as Database.Database);
+    db = createDb();
+    authService = new AuthService(db);
+  });
+
+  afterEach(() => {
+    db.close();
   });
 
   it("does not log raw passwords", async () => {
@@ -456,10 +413,16 @@ describe("AuthService — security properties", () => {
 });
 
 describe("AuthService — custom role and defaults", () => {
+  let db: Database.Database;
   let authService: AuthService;
 
   beforeEach(() => {
-    authService = new AuthService(createMockDb() as Database.Database);
+    db = createDb();
+    authService = new AuthService(db);
+  });
+
+  afterEach(() => {
+    db.close();
   });
 
   it("sets default role to 'client' when not provided", async () => {
@@ -495,10 +458,16 @@ describe("AuthService — custom role and defaults", () => {
 });
 
 describe("AuthService — timing-safe comparisons", () => {
+  let db: Database.Database;
   let authService: AuthService;
 
   beforeEach(() => {
-    authService = new AuthService(createMockDb() as Database.Database);
+    db = createDb();
+    authService = new AuthService(db);
+  });
+
+  afterEach(() => {
+    db.close();
   });
 
   it("login always performs password verification even for non-existent users", async () => {
@@ -524,10 +493,16 @@ describe("AuthService — timing-safe comparisons", () => {
 });
 
 describe("AuthService — integration scenarios", () => {
+  let db: Database.Database;
   let authService: AuthService;
 
   beforeEach(() => {
-    authService = new AuthService(createMockDb() as Database.Database);
+    db = createDb();
+    authService = new AuthService(db);
+  });
+
+  afterEach(() => {
+    db.close();
   });
 
   it("supports complete auth lifecycle: register → login → refresh → logout", async () => {
