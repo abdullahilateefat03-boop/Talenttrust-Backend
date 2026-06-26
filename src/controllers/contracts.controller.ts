@@ -1,6 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
 import { ContractsService } from '../services/contracts.service';
-import { CreateContractDto } from '../modules/contracts/dto/contract.dto';
 import { parseLimit, decodeCursor } from '../contracts/cursor.repository';
 import { CURSOR_DEFAULT_LIMIT } from '../contracts/cursor.types';
 import { CreateContractDto, UpdateContractDto } from '../modules/contracts/dto/contract.dto';
@@ -79,11 +78,15 @@ export class ContractsController {
           ? rawCursor
           : undefined;
 
-      const page = await contractsService.getContractsPage({ limit, cursor });
+      const { ContractRepository } = require('../repositories/contractRepository');
+      const service = new ContractsService(new ContractRepository());
+      const page = await service.getContractsPage({ limit, cursor });
       res.status(200).json({ status: 'success', data: page });
-  /**
-   * @param service - Injected ContractsService instance
-   */
+    } catch (error) {
+      next(error);
+    }
+  }
+
   constructor(private readonly service: ContractsService) {}
 
   /**
@@ -118,6 +121,23 @@ export class ContractsController {
    * GET /api/v1/contracts/:id
    * Fetch a single contract by ID.
    */
+  public static async getContractById(req: Request, res: Response, next: NextFunction) {
+    const { ContractRepository } = require('../repositories/contractRepository');
+    const service = new ContractsService(new ContractRepository());
+    try {
+      const contract = await service.getContractById(req.params.id!);
+      if (!contract) {
+        throw new NotFoundError('The requested resource was not found');
+      }
+      ok(res, contract);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Instance version of getContractById that uses the injected service.
+   */
   public async getContractById(req: Request, res: Response, next: NextFunction) {
     try {
       const contract = await this.service.getContractById(req.params.id!);
@@ -134,11 +154,25 @@ export class ContractsController {
    * POST /api/v1/contracts
    * Create a new contract.
    */
-  public static async createContract(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ): Promise<void> {
+  public static async createContract(req: Request, res: Response, next: NextFunction) {
+    const { ContractRepository } = require('../repositories/contractRepository');
+    const service = new ContractsService(new ContractRepository());
+    try {
+      const data: CreateContractDto = req.body;
+      const newContract = await service.createContract(data);
+      ok(res, newContract, undefined, 201);
+    } catch (error) {
+      if (error instanceof ContractBoundsError) {
+        fail(res, 'contract_bounds_error', error.message, 422);
+        return;
+      }
+      next(error);
+    }
+  }
+
+  /**
+   * Instance version of createContract that uses the injected service.
+   */
   public async createContract(req: Request, res: Response, next: NextFunction) {
     try {
       const data: CreateContractDto = req.body;
@@ -206,6 +240,13 @@ export class ContractsController {
   /**
    * GET /api/v1/contracts/bounds
    * Returns the enforced per-contract limits for client discovery.
+   */
+  public static getBounds(_req: Request, res: Response) {
+    ok(res, CONTRACT_BOUNDS);
+  }
+
+  /**
+   * Instance version of getBounds.
    */
   public getBounds(_req: Request, res: Response) {
     ok(res, CONTRACT_BOUNDS);

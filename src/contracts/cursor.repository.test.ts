@@ -7,6 +7,7 @@ import {
   decodeCursor,
   parseLimit,
 } from './cursor.repository';
+import { InMemoryCursorRepository } from './cursor.repository';
 import { CURSOR_MAX_LIMIT, CURSOR_DEFAULT_LIMIT } from './cursor.types';
 
 describe('encodeCursor / decodeCursor', () => {
@@ -118,7 +119,8 @@ describe('parseLimit', () => {
 
   it('throws when limit is a float string that truncates to 0', () => {
     expect(() => parseLimit('0.9')).toThrow(/positive integer/i);
-import { InMemoryCursorRepository } from './cursor.repository';
+  });
+});
 
 describe('InMemoryCursorRepository', () => {
   it('returns null for non-existent cursor', async () => {

@@ -96,8 +96,8 @@ export class TokenBucketLimiter {
    * @returns A promise that resolves when the caller may proceed with delivery.
    */
   public async acquireToken(providerId: string): Promise<void> {
-    try {
-      const { allowed } = await this.store.consume(providerId, this.capacity, this.refillRatePerSec);
+    const bucket = this.getBucket(providerId);
+    await this.store.consume(providerId, this.capacity, this.refillRatePerSec);
 
     if (bucket.tokens >= 1) {
       bucket.tokens -= 1;
