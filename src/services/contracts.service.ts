@@ -4,9 +4,6 @@ import { ContractRepository } from '../repositories/contractRepository';
 import { SorobanService } from './soroban.service';
 import type { CursorPaginationInput, CursorPage } from '../contracts/cursor.types';
 
-/**
- * @dev Service layer for managing Freelancer Escrow Contracts.
- * Handles business logic, database interactions (mocked for now),
 import { validateContractBounds, ContractBoundsError } from '../contracts/bounds';
 import { MAX_MILESTONES_PER_CONTRACT, MAX_CONTRACT_AMOUNT_STROOPS } from '../contracts/bounds';
 import { NotFoundError } from '../errors/appError';
@@ -29,12 +26,6 @@ export class ContractsService {
   }
 
   /**
-   * Retrieves all contracts.
-   * @deprecated Prefer {@link getContractsPage} for scalable access.
-   * @returns Array of contract metadata.
-   */
-  public async getAllContracts() {
-    return this.contracts;
    * Retrieves all contracts from the repository.
    * @returns Array of contract metadata including version field.
    */
@@ -107,18 +98,6 @@ export class ContractsService {
    * @returns The newly created contract object.
    * @throws ContractBoundsError if budget or milestone totals exceed policy limits.
    */
-  public async createContract(data: CreateContractDto) {
-    const newContract = {
-      id: crypto.randomUUID(),
-      ...data,
-      status: 'PENDING',
-      createdAt: new Date().toISOString(),
-    };
-
-    this.contracts.push(newContract);
-
-    // Simulate notifying the Soroban service to prepare the transaction
-    await this.sorobanService.prepareEscrow(newContract.id, data.budget);
   public async createContract(data: CreateContractDto): Promise<Contract> {
     const boundsCheck = validateContractBounds(data.budget, data.milestones);
     if (!boundsCheck.valid) {

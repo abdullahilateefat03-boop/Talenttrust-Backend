@@ -52,6 +52,9 @@ export interface CursorPage<T> {
   nextCursor: string | null;
   hasNextPage: boolean;
   limit: number;
+}
+
+/**
  * @notice Cursor checkpoint for resuming indexing from stable checkpoints.
  * @dev Cursor captures the last successfully indexed event sequence for a contract.
  *      Multiple sources (e.g., onchain blocks, API pagination) use cursors to resume safely.

@@ -1,6 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
 import { ContractsService } from '../services/contracts.service';
-import { CreateContractDto } from '../modules/contracts/dto/contract.dto';
 import { parseLimit, decodeCursor } from '../contracts/cursor.repository';
 import { CURSOR_DEFAULT_LIMIT } from '../contracts/cursor.types';
 import { CreateContractDto, UpdateContractDto } from '../modules/contracts/dto/contract.dto';
@@ -81,6 +80,11 @@ export class ContractsController {
 
       const page = await contractsService.getContractsPage({ limit, cursor });
       res.status(200).json({ status: 'success', data: page });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   /**
    * @param service - Injected ContractsService instance
    */
@@ -134,11 +138,6 @@ export class ContractsController {
    * POST /api/v1/contracts
    * Create a new contract.
    */
-  public static async createContract(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ): Promise<void> {
   public async createContract(req: Request, res: Response, next: NextFunction) {
     try {
       const data: CreateContractDto = req.body;

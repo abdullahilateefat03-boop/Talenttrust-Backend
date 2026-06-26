@@ -115,10 +115,9 @@ const MIGRATIONS: Migration[] = [
       `);
     },
   },
-},
-{
-  version: 5,
-  name: "create_transactions_table",
+  {
+    version: 5,
+    name: "create_transactions_table",
   checksumSource: [
     "CREATE TABLE IF NOT EXISTS transactions (",
   ].join("\n"),
@@ -279,7 +278,7 @@ export function computeLegacyMigrationChecksum(migration: Migration): string | n
     return null;
   }
   return createHash("sha256")
-    .update(`${migration.version}\n${migration.name}\n${source}`)
+    .update(`${migration.version}\n${migration.name}\n${migration.up.toString()}`)
     .digest("hex");
 }
 

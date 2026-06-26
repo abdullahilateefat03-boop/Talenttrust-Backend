@@ -80,6 +80,7 @@ describe('ContractsController', () => {
     it('returns 200 with cursor page on first page (no cursor)', async () => {
       const fakePage = { data: [], nextCursor: null, hasNextPage: false, limit: 20 };
       mockGetContractsPage.mockResolvedValue(fakePage);
+    });
 
   describe('getContracts', () => {
     it('returns 200 with contracts list', async () => {
@@ -226,8 +227,13 @@ describe('ContractsController', () => {
     it('calls next() when service throws', async () => {
       const mockError = new Error('DB Down');
       mockGetContractsPage.mockRejectedValue(mockError);
+      mockRequest.query = {};
 
       await ContractsController.getContracts(
+        mockRequest as Request,
+        mockResponse as Response,
+        mockNext,
+      );
       expect(mockNext).toHaveBeenCalledWith(mockError);
     });
   });
@@ -243,44 +249,6 @@ describe('ContractsController', () => {
         mockNext,
       );
 
-      expect(mockNext).toHaveBeenCalledWith(mockError);
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // createContract
-  // -------------------------------------------------------------------------
-
-  describe('createContract', () => {
-    it('returns 201 with the created contract', async () => {
-      const fakeContract = { id: 'uuid-1', title: 'Test Contract' };
-      mockCreateContract.mockResolvedValue(fakeContract);
-
-      await ContractsController.createContract(
-        mockRequest as Request,
-        mockResponse as Response,
-        mockNext,
-      );
-
-      expect(mockResponse.status).toHaveBeenCalledWith(201);
-      expect(mockResponse.json).toHaveBeenCalledWith({
-        status: 'success',
-        data: fakeContract,
-      });
-    });
-
-    it('calls next() when service throws', async () => {
-      const mockError = new Error('Creation failed');
-      mockCreateContract.mockRejectedValue(mockError);
-
-      await ContractsController.createContract(
-        mockRequest as Request,
-        mockResponse as Response,
-        mockNext,
-      );
-
-      expect(mockNext).toHaveBeenCalledWith(mockError);
-    });
       expect(mockResponse.status).toHaveBeenCalledWith(200);
       expect(mockResponse.json).toHaveBeenCalledWith({ status: 'success', data: contract });
     });
