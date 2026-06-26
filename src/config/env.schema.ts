@@ -167,7 +167,7 @@ export const envSchema = z.object({
         });
       }
     }
-  }
+  },
 });
 
 
