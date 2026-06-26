@@ -402,9 +402,9 @@ The API now includes a schema-based request validation framework for:
 - URL `query`
 - JSON request `body`
 
-Validation is strict by default:
+Validation behaviour:
 
-- Unknown fields are rejected.
+- Unknown fields are stripped.
 - Required fields are enforced.
 - Type and range/length constraints are validated.
 
