@@ -21,11 +21,14 @@ export const SystemClock: IClock = {
  * Designed to ensure eventual consistency and respect RPC rate limits during peak network congestion.
  */
 export class TransactionPoller {
+  public readonly name = 'transaction-poller';
   private readonly provider: IBlockchainProvider;
   private readonly maxRetries: number;
   private readonly initialDelay: number;
   private readonly maxTotalDurationMs?: number;
   private readonly clock: IClock;
+  private acceptingNewPolls = true;
+  private readonly activePolls = new Map<string, Promise<void>>();
 
   /**
    * @param provider The blockchain provider instance.
@@ -59,6 +62,16 @@ export class TransactionPoller {
    * Initializes local state if necessary and triggers the recursive backoff loop.
    */
   public async poll(txHash: string): Promise<void> {
+    if (!this.acceptingNewPolls) {
+      return;
+    }
+
+    const existingPoll = this.activePolls.get(txHash);
+    if (existingPoll) {
+      await existingPoll;
+      return;
+    }
+
     let transaction = transactionsDb.get(txHash);
 
     if (!transaction) {
@@ -74,11 +87,20 @@ export class TransactionPoller {
       transactionsDb.set(txHash, transaction);
     }
 
+    const pollPromise = (async () => {
+      try {
+        await this.pollWithBackoff(txHash);
+      } catch (error) {
+        // Catch fatal orchestrator errors to prevent process-level unhandled rejections
+        console.error(`Polling orchestrator failed for ${txHash}:`, error);
+      }
+    })();
+
+    this.activePolls.set(txHash, pollPromise);
     try {
-      await this.pollWithBackoff(txHash);
-    } catch (error) {
-      // Catch fatal orchestrator errors to prevent process-level unhandled rejections
-      console.error(`Polling orchestrator failed for ${txHash}:`, error);
+      await pollPromise;
+    } finally {
+      this.activePolls.delete(txHash);
     }
   }
 
@@ -97,6 +119,42 @@ export class TransactionPoller {
         console.error(`Recovery polling failed for ${tx.hash}:`, error);
       });
     }
+  }
+
+  /**
+   * Stops accepting new polling work during shutdown.
+   */
+  public stopAccepting(): void {
+    this.acceptingNewPolls = false;
+  }
+
+  /**
+   * Waits for in-flight polling work to finish before continuing shutdown.
+   */
+  public async drain(): Promise<void> {
+    if (this.activePolls.size === 0) {
+      return;
+    }
+
+    await Promise.allSettled(Array.from(this.activePolls.values()));
+  }
+
+  /**
+   * Persists any pending transactions so shutdown can checkpoint state.
+   */
+  public async checkpoint(): Promise<void> {
+    for (const transaction of transactionsDb.values()) {
+      if (transaction.status === TransactionStatus.PENDING) {
+        transactionsDb.set(transaction.hash, transaction);
+      }
+    }
+  }
+
+  /**
+   * Finalizes the poller after the drain phase.
+   */
+  public async close(): Promise<void> {
+    await this.drain();
   }
 
   /**
