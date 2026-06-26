@@ -2,6 +2,11 @@ import { CreateContractDto, UpdateContractDto } from '../modules/contracts/dto/c
 import { Contract } from '../db/types';
 import { ContractRepository } from '../repositories/contractRepository';
 import { SorobanService } from './soroban.service';
+import type { CursorPaginationInput, CursorPage } from '../contracts/cursor.types';
+
+/**
+ * @dev Service layer for managing Freelancer Escrow Contracts.
+ * Handles business logic, database interactions (mocked for now),
 import { validateContractBounds, ContractBoundsError } from '../contracts/bounds';
 import { MAX_MILESTONES_PER_CONTRACT, MAX_CONTRACT_AMOUNT_STROOPS } from '../contracts/bounds';
 import { NotFoundError } from '../errors/appError';
@@ -15,12 +20,21 @@ export class ContractsService {
   private contractRepository: ContractRepository;
   private sorobanService: SorobanService;
 
+  // Mock database (in-memory; replaced by a real DB repository in production)
+  private contracts: any[] = [];
+
   constructor(contractRepository: ContractRepository) {
     this.sorobanService = new SorobanService();
     this.contractRepository = contractRepository;
   }
 
   /**
+   * Retrieves all contracts.
+   * @deprecated Prefer {@link getContractsPage} for scalable access.
+   * @returns Array of contract metadata.
+   */
+  public async getAllContracts() {
+    return this.contracts;
    * Retrieves all contracts from the repository.
    * @returns Array of contract metadata including version field.
    */
@@ -38,12 +52,73 @@ export class ContractsService {
   }
 
   /**
+   * Returns a cursor-paginated page of contracts ordered by `createdAt DESC`.
+   *
+   * The in-memory implementation mirrors the keyset semantics of the SQLite
+   * repository so behaviour is consistent across environments.
+   *
+   * @param input - Optional `limit` (1–100) and opaque `cursor` string.
+   * @returns A {@link CursorPage} with items and next-page cursor.
+   */
+  public async getContractsPage(
+    input: CursorPaginationInput = {},
+  ): Promise<CursorPage<any>> {
+    // Import primitives here to keep the constructor lightweight
+    const { parseLimit, encodeCursor, decodeCursor } = await import(
+      '../contracts/cursor.repository'
+    );
+
+    const limit = parseLimit(input.limit);
+
+    // Sort descending by createdAt, then id as tie-breaker (mirrors the DB query)
+    const sorted = [...this.contracts].sort((a, b) => {
+      const tDiff =
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      if (tDiff !== 0) return tDiff;
+      return b.id < a.id ? -1 : b.id > a.id ? 1 : 0;
+    });
+
+    let startIndex = 0;
+    if (input.cursor) {
+      const pos = decodeCursor(input.cursor);
+      const anchorIndex = sorted.findIndex(
+        (c) => c.createdAt === pos.createdAt && c.id === pos.id,
+      );
+      startIndex = anchorIndex === -1 ? sorted.length : anchorIndex + 1;
+    }
+
+    const slice = sorted.slice(startIndex, startIndex + limit + 1);
+    const hasNextPage = slice.length > limit;
+    const pageItems = hasNextPage ? slice.slice(0, limit) : slice;
+
+    const lastItem = pageItems[pageItems.length - 1];
+    const nextCursor =
+      hasNextPage && lastItem
+        ? encodeCursor({ createdAt: lastItem.createdAt, id: lastItem.id })
+        : null;
+
+    return { data: pageItems, nextCursor, hasNextPage, limit };
+  }
+
+  /**
    * Creates a new contract off-chain, preparing it for escrow deposit.
    * Enforces milestone count and total amount caps before persisting.
    * @param data The contract details conforming to CreateContractDto.
    * @returns The newly created contract object.
    * @throws ContractBoundsError if budget or milestone totals exceed policy limits.
    */
+  public async createContract(data: CreateContractDto) {
+    const newContract = {
+      id: crypto.randomUUID(),
+      ...data,
+      status: 'PENDING',
+      createdAt: new Date().toISOString(),
+    };
+
+    this.contracts.push(newContract);
+
+    // Simulate notifying the Soroban service to prepare the transaction
+    await this.sorobanService.prepareEscrow(newContract.id, data.budget);
   public async createContract(data: CreateContractDto): Promise<Contract> {
     const boundsCheck = validateContractBounds(data.budget, data.milestones);
     if (!boundsCheck.valid) {
@@ -70,13 +145,47 @@ export class ContractsService {
 
   /**
    * Updates a contract using Optimistic Concurrency Control.
+   *
+   * Maps every updatable field from {@link UpdateContractDto} into the update
+   * payload and re-runs {@link validateContractBounds} whenever `budget` or
+   * `milestones` are included in the patch. Rejects empty patches with a
+   * validation error so callers receive a clear signal rather than a misleading
+   * 200 that changed nothing.
+   *
+   * @param id  - UUID of the contract to update.
+   * @param dto - Partial update payload including the OCC `version`.
+   * @throws ContractBoundsError  when amount or milestone bounds are violated.
+   * @throws ValidationError      when the patch is empty.
+   * @throws VersionConflictError when the version is stale.
    */
   public async updateContract(id: string, dto: UpdateContractDto): Promise<Contract> {
     const { version, ...fields } = dto;
+
+    // Reject no-op updates
+    const hasFields = Object.keys(fields).some(
+      (k) => (fields as Record<string, unknown>)[k] !== undefined
+    );
+    if (!hasFields) {
+      throw new Error('At least one field must be provided for an update.');
+    }
+
+    // Re-validate bounds when amount or milestones are being changed
+    const budget = fields.budget;
+    const milestones = fields.milestones;
+    if (budget !== undefined || milestones !== undefined) {
+      // Fall back to 0 if budget is absent so the bounds check can still run on milestones alone
+      const boundsCheck = validateContractBounds(budget ?? 0, milestones);
+      if (!boundsCheck.valid) {
+        throw new ContractBoundsError(boundsCheck.error);
+      }
+    }
+
     const updateFields: Partial<Contract> = {};
-    if (fields.title) updateFields.title = fields.title;
-    if (fields.status) updateFields.status = fields.status;
-    
+    if (fields.title !== undefined) updateFields.title = fields.title;
+    if (fields.status !== undefined) updateFields.status = fields.status;
+    if (fields.budget !== undefined) updateFields.amount = fields.budget;
+    if (fields.freelancerId !== undefined) updateFields.freelancerId = fields.freelancerId ?? '';
+
     return this.contractRepository.updateWithVersion(id, updateFields, version);
   }
 

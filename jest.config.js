@@ -28,7 +28,6 @@ module.exports = {
     'src/middleware/__tests__/authorization.test.ts',
     'src/middleware/__tests__/rateLimiter.test.ts',
     'src/middleware/auth.test.ts',
-    'src/middleware/idempotency.test.ts',
     'src/rateLimit.integration.test.ts',
     'src/repositories/contracts.repository.test.ts',
     'src/repositories/reputationRepository.test.ts',

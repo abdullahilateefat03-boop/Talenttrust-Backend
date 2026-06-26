@@ -10,17 +10,20 @@
  * enough tokens have refilled — deliveries are **paced/queued, never dropped**.
  *
  * ## State
- * Buckets are held in-process (a plain `Map`).  In a blue/green or
- * multi-replica deployment each process maintains its own independent bucket
- * state.  This is intentional: the implementation does not require Redis or
- * any shared store.  See `docs/request-limits-implementation.md` for the
- * trade-off discussion and upgrade path.
+ * Buckets are held in the shared in-process `RateLimitStore`. In a blue/green
+ * or multi-replica deployment each process maintains its own independent bucket
+ * state unless the store interface is backed by Redis or another shared
+ * implementation.
  *
  * ## Configuration (environment variables)
  * | Variable                        | Default | Description                              |
  * |---------------------------------|---------|------------------------------------------|
  * | `WEBHOOK_BUCKET_CAPACITY`       | `10`    | Max tokens per provider bucket           |
  * | `WEBHOOK_REFILL_RATE_PER_SEC`   | `2`     | Tokens added per second per provider     |
+ * | `RATE_LIMIT_STORE`              | `memory`| Store type: 'memory' or 'redis'          |
+ * | `REDIS_HOST`                    | None    | Redis server hostname                    |
+ * | `REDIS_PORT`                    | `6379`  | Redis server port                        |
+ * | `REDIS_PASSWORD`                | None    | Redis server password                    |
  *
  * Both values are validated at construction time; the process will throw a
  * descriptive error on invalid configuration rather than silently misbehaving.
@@ -30,67 +33,22 @@
  * Only opaque provider IDs appear in log output.
  */
 
+import Redis from 'ioredis';
 import { recordThrottled } from './webhookMetrics';
+import { rateLimitConfig } from './config/rateLimit';
+import {
+  loadWebhookTokenBucketConfig,
+  rateLimitStore,
+  type WebhookTokenBucketConfig,
+} from './config/rateLimit';
+import type { RateLimitStoreInterface, TokenBucketEntry } from './lib/rateLimitStore';
 
 // ---------------------------------------------------------------------------
 // Configuration helpers
 // ---------------------------------------------------------------------------
 
-/** Validated, parsed rate-limiter configuration. */
-export interface RateLimiterConfig {
-  /** Maximum number of tokens a single provider bucket can hold. */
-  capacity: number;
-  /** Number of tokens added to each bucket per second. */
-  refillRatePerSec: number;
-}
-
-/**
- * Parse and validate rate-limiter configuration from environment variables.
- *
- * @throws {Error} If any value is missing, non-numeric, non-positive, or
- *   `capacity` is zero (which would make every delivery block forever).
- */
-export function loadRateLimiterConfig(): RateLimiterConfig {
-  const rawCapacity = process.env.WEBHOOK_BUCKET_CAPACITY ?? '10';
-  const rawRefill = process.env.WEBHOOK_REFILL_RATE_PER_SEC ?? '2';
-
-  const capacity = Number(rawCapacity);
-  const refillRatePerSec = Number(rawRefill);
-
-  if (!Number.isFinite(capacity) || capacity <= 0) {
-    throw new Error(
-      `[rateLimit] Invalid WEBHOOK_BUCKET_CAPACITY="${rawCapacity}". ` +
-        'Must be a finite positive number greater than zero.',
-    );
-  }
-
-  if (!Number.isFinite(refillRatePerSec) || refillRatePerSec <= 0) {
-    throw new Error(
-      `[rateLimit] Invalid WEBHOOK_REFILL_RATE_PER_SEC="${rawRefill}". ` +
-        'Must be a finite positive number greater than zero.',
-    );
-  }
-
-  return { capacity, refillRatePerSec };
-}
-
-// ---------------------------------------------------------------------------
-// Internal bucket state
-// ---------------------------------------------------------------------------
-
-/** Runtime state for a single provider's token bucket. */
-interface BucketState {
-  /** Current token count (may be fractional between refill ticks). */
-  tokens: number;
-  /** Timestamp (ms) of the last refill calculation. */
-  lastRefillMs: number;
-  /** Pending waiters in FIFO order. Each resolves when a token is available. */
-  queue: Array<() => void>;
-}
-
-// ---------------------------------------------------------------------------
-// TokenBucketLimiter
-// ---------------------------------------------------------------------------
+export type RateLimiterConfig = WebhookTokenBucketConfig;
+export const loadRateLimiterConfig = loadWebhookTokenBucketConfig;
 
 /**
  * Per-provider token-bucket rate limiter.
@@ -108,16 +66,19 @@ interface BucketState {
 export class TokenBucketLimiter {
   private readonly capacity: number;
   private readonly refillRatePerSec: number;
-  private readonly buckets: Map<string, BucketState> = new Map();
+  private readonly store: RateLimitStoreInterface;
 
   /**
    * @param config - Parsed configuration.  Defaults to
    *   {@link loadRateLimiterConfig} (reads env vars) when omitted.
+   * @param store - Shared rate-limit store. Defaults to the process-wide store
+   *   from `src/config/rateLimit.ts`.
    */
-  constructor(config?: RateLimiterConfig) {
+  constructor(config?: RateLimiterConfig, store: RateLimitStoreInterface = rateLimitStore) {
     const resolved = config ?? loadRateLimiterConfig();
     this.capacity = resolved.capacity;
     this.refillRatePerSec = resolved.refillRatePerSec;
+    this.store = store;
   }
 
   // -------------------------------------------------------------------------
@@ -135,11 +96,12 @@ export class TokenBucketLimiter {
    * @returns A promise that resolves when the caller may proceed with delivery.
    */
   public async acquireToken(providerId: string): Promise<void> {
-    this.refillBucket(providerId);
-    const bucket = this.getBucket(providerId);
+    try {
+      const { allowed } = await this.store.consume(providerId, this.capacity, this.refillRatePerSec);
 
     if (bucket.tokens >= 1) {
       bucket.tokens -= 1;
+      this.store.setTokenBucket(providerId, bucket);
       return;
     }
 
@@ -151,6 +113,7 @@ export class TokenBucketLimiter {
 
     return new Promise<void>((resolve) => {
       bucket.queue.push(resolve);
+      this.store.setTokenBucket(providerId, bucket);
       this.scheduleRefill(providerId);
     });
   }
@@ -161,9 +124,11 @@ export class TokenBucketLimiter {
    *
    * @param providerId - Opaque provider identifier.
    */
-  public getTokenCount(providerId: string): number {
-    this.refillBucket(providerId);
-    return this.getBucket(providerId).tokens;
+  public getTokenCount(providerId: string): number | Promise<number> {
+    if (this.store instanceof MemoryBucketStore) {
+      return this.store.getTokensSync(providerId, this.capacity, this.refillRatePerSec);
+    }
+    return this.store.getTokens(providerId, this.capacity, this.refillRatePerSec);
   }
 
   /**
@@ -172,7 +137,72 @@ export class TokenBucketLimiter {
    * @param providerId - Opaque provider identifier.
    */
   public getQueueDepth(providerId: string): number {
-    return this.getBucket(providerId).queue.length;
+    return this.getOrCreateBucket(providerId).queue.length;
+  }
+
+  /**
+   * Close connections or clean up resources.
+   */
+  public async close(): Promise<void> {
+    if (this.store instanceof RedisBucketStore) {
+      await this.store.disconnect();
+    }
+  }
+
+  /**
+   * Start periodic sampling of token and queue-depth metrics.
+   *
+   * Samples all active provider buckets at the specified interval and updates
+   * the provided gauges. Sampling does not consume tokens and is designed to
+   * have minimal impact on the delivery hot path.
+   *
+   * @param tokenGauge - Gauge to record current token count per provider.
+   * @param queueDepthGauge - Gauge to record current queue depth per provider.
+   * @param intervalMs - Sampling interval in milliseconds. Recommended: 5000-15000ms.
+   * @returns A function to stop sampling.
+   */
+  public startMetricsSampling(
+    tokenGauge: Gauge<string>,
+    queueDepthGauge: Gauge<string>,
+    intervalMs: number = 10000,
+  ): () => void {
+    if (this.samplingIntervalId !== null) {
+      console.warn('[rateLimit] Metrics sampling already active, ignoring start request.');
+      return () => {};
+    }
+
+    const sample = () => {
+      for (const [providerId] of this.buckets) {
+        const redactedProviderId = redactId(providerId);
+        const tokens = this.getTokenCount(providerId);
+        const queueDepth = this.getQueueDepth(providerId);
+
+        tokenGauge.set({ provider_id: redactedProviderId }, tokens);
+        queueDepthGauge.set({ provider_id: redactedProviderId }, queueDepth);
+      }
+    };
+
+    // Initial sample
+    sample();
+
+    this.samplingIntervalId = setInterval(sample, intervalMs);
+
+    return () => {
+      if (this.samplingIntervalId !== null) {
+        clearInterval(this.samplingIntervalId);
+        this.samplingIntervalId = null;
+      }
+    };
+  }
+
+  /**
+   * Stop metrics sampling if active.
+   */
+  public stopMetricsSampling(): void {
+    if (this.samplingIntervalId !== null) {
+      clearInterval(this.samplingIntervalId);
+      this.samplingIntervalId = null;
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -182,16 +212,17 @@ export class TokenBucketLimiter {
   /**
    * Retrieve or lazily create the bucket state for a provider.
    */
-  private getBucket(providerId: string): BucketState {
-    if (!this.buckets.has(providerId)) {
-      this.buckets.set(providerId, {
-        tokens: this.capacity,
-        lastRefillMs: Date.now(),
-        queue: [],
-      });
-    }
-    // Non-null assertion is safe: we just set it above if absent.
-    return this.buckets.get(providerId)!;
+  private getBucket(providerId: string): TokenBucketEntry {
+    const existing = this.store.getTokenBucket(providerId);
+    if (existing) return existing;
+
+    const created: TokenBucketEntry = {
+      tokens: this.capacity,
+      lastRefillMs: Date.now(),
+      queue: [],
+    };
+    this.store.setTokenBucket(providerId, created);
+    return created;
   }
 
   /**
@@ -208,6 +239,7 @@ export class TokenBucketLimiter {
 
     bucket.tokens = Math.min(this.capacity, bucket.tokens + added);
     bucket.lastRefillMs = nowMs;
+    this.store.setTokenBucket(providerId, bucket);
   }
 
   /**
@@ -218,13 +250,13 @@ export class TokenBucketLimiter {
    * re-schedules itself while the queue is non-empty.
    */
   private scheduleRefill(providerId: string): void {
-    const bucket = this.getBucket(providerId);
     // Time (ms) until the next whole token is available.
     const msUntilToken = Math.ceil((1 / this.refillRatePerSec) * 1_000);
 
     setTimeout(() => {
-      this.refillBucket(providerId);
-      this.drainQueue(providerId);
+      this.drainQueue(providerId).catch((err) => {
+        console.error(`[rateLimit] Error refilling and draining queue:`, err);
+      });
     }, msUntilToken);
   }
 
@@ -232,14 +264,29 @@ export class TokenBucketLimiter {
    * Resolve as many queued waiters as the current token count allows,
    * then re-schedule if the queue is still non-empty.
    */
-  private drainQueue(providerId: string): void {
-    const bucket = this.getBucket(providerId);
+  private async drainQueue(providerId: string): Promise<void> {
+    const bucket = this.getOrCreateBucket(providerId);
 
-    while (bucket.queue.length > 0 && bucket.tokens >= 1) {
-      bucket.tokens -= 1;
-      const resolve = bucket.queue.shift()!;
-      resolve();
+    while (bucket.queue.length > 0) {
+      try {
+        const { allowed } = await this.store.consume(providerId, this.capacity, this.refillRatePerSec);
+        if (allowed) {
+          const waiter = bucket.queue.shift()!;
+          waiter.resolve();
+        } else {
+          break;
+        }
+      } catch (err) {
+        console.error(`[rateLimit] Redis store consume error in drainQueue:`, err);
+        // Fail all pending waiters for this provider
+        while (bucket.queue.length > 0) {
+          const waiter = bucket.queue.shift()!;
+          waiter.reject(err instanceof Error ? err : new Error(String(err)));
+        }
+        break;
+      }
     }
+    this.store.setTokenBucket(providerId, bucket);
 
     if (bucket.queue.length > 0) {
       this.scheduleRefill(providerId);

@@ -513,9 +513,108 @@ Real purge output shows both candidates and deletion results:
 - All log output is redacted to prevent PII leakage
 - Failed deletions are tracked separately
 
+## Storage Backends
+
+The retention manager supports two interchangeable storage providers behind a single `IStorageProvider` interface.
+
+### In-Memory (default in tests)
+
+- `InMemoryStorageProvider` keeps every record in a process-local `Map`.
+- Data is lost on restart.
+- Cheap and deterministic — the right choice for unit tests.
+
+### SQLite (default in production)
+
+- `SqliteStorageProvider` persists every record to the SQLite database opened by `src/db/database.ts`.
+- Writes are atomic (SQLite's per-statement transaction model); records survive restarts, blue-green switches, and crash recovery.
+- Two physically separate tables are provisioned by migration **v7**:
+
+  | Table               | Backing storage type                          |
+  | ------------------- | --------------------------------------------- |
+  | `retention_local`   | `ArchivalStorageType.LOCAL` and `CLOUD`       |
+  | `retention_archive` | `ArchivalStorageType.COLD_STORAGE` and `ENCRYPTED_ARCHIVE` |
+
+  Splitting the two buckets into their own tables (rather than co-locating them with a `storage_kind` discriminator column) mirrors how `StorageManager` already treats the local and archive buckets as independent providers.
+
+#### Schema (per table)
+
+```sql
+CREATE TABLE retention_local (
+  id                  TEXT    PRIMARY KEY,
+  entity_type         TEXT    NOT NULL,
+  data                TEXT    NOT NULL,        -- JSON payload
+  classification      TEXT    NOT NULL,
+  created_at          TEXT    NOT NULL,        -- ISO-8601
+  expires_at          TEXT    NOT NULL,        -- ISO-8601
+  archived_at         TEXT,                    -- ISO-8601, nullable
+  archived_location   TEXT,                    -- nullable
+  is_archived         INTEGER NOT NULL CHECK (is_archived IN (0, 1)),
+  retention_policy_id TEXT,                    -- nullable
+  metadata            TEXT,                    -- JSON, nullable
+  updated_at          TEXT    NOT NULL
+);
+CREATE INDEX idx_retention_local_entity_type ON retention_local(entity_type);
+CREATE INDEX idx_retention_local_is_archived ON retention_local(is_archived);
+CREATE INDEX idx_retention_local_expires_at ON retention_local(expires_at);
+CREATE INDEX idx_retention_local_created_at ON retention_local(created_at);
+```
+
+`retention_archive` shares the identical shape.
+
+#### Bounded reads
+
+`SqliteStorageProvider.listPaginated(limit, offset = 0)` is the recommended way to scan a large archive. The provider:
+
+- Orders by `created_at ASC, id ASC` for a stable cursor.
+- Clamps `limit` into `[1, RETENTION_PAGE_MAX_LIMIT]` (`1000`).
+- Clamps `offset` to `>= 0`.
+
+#### Backend selection
+
+`DataRetentionManager` picks its default providers using `DataRetentionManagerOptions.storageBackend`:
+
+| Value     | Outside Jest                                   | Inside Jest (`JEST_WORKER_ID` is set) | Notes                                                                                |
+| --------- | ---------------------------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------ |
+| `auto`    | `SqliteStorageProvider` (production default)   | `InMemoryStorageProvider`             | Reasoning: tests should never collide on the shared SQLite file.                     |
+| `sqlite`  | `SqliteStorageProvider`                        | `SqliteStorageProvider`               | Force-enables persistence. Use when integration tests need durability.                |
+| `memory`  | `InMemoryStorageProvider`                      | `InMemoryStorageProvider`             | Force the legacy behaviour. Use for one-off CLIs and ad-hoc scripts.                 |
+
+Caller-supplied `customLocalProvider` / `customArchiveProvider` always win over the default. Detection keys off `JEST_WORKER_ID` and never `NODE_ENV` so a production deployment running with `NODE_ENV=test` cannot accidentally demote to in-memory.
+
+#### Example: end-to-end with SQLite
+
+```typescript
+import { DataRetentionManager, RetentionConfig } from './retention';
+
+const manager = new DataRetentionManager(config, undefined, undefined, {
+  storageBackend: 'sqlite',
+});
+
+const { data } = await manager.storeData(
+  {
+    entityType: DataEntityType.TRANSACTION,
+    data: { txId: 'TX-001', amount: 1000 },
+    classification: DataClassification.INTERNAL,
+    createdAt: new Date(),
+  },
+  undefined,
+  'system',
+);
+
+// Survives restart: a fresh SqliteStorageProvider opened against the same
+// DB file will retrieve the same record.
+const reloaded = await manager.retrieveData(data.id);
+console.log(reloaded?.data); // { txId: 'TX-001', amount: 1000 }
+```
+
+#### Migration & rollout
+
+- Migration `v7 / create_retention_storage_tables` is **idempotent** (uses `CREATE TABLE IF NOT EXISTS`).
+- Applied migrations are verified against a SHA-256 checksum at startup — modifying an already-applied migration raises an error; add a new one instead.
+- When upgrading from a deployment that used the in-memory provider, no schema gymnastics are required: the new tables are simply empty after migration v7 runs.
+
 ## Future Enhancements
 
-- [ ] Direct database integration
 - [ ] Multi-region replication support
 - [ ] Advanced encryption with key rotation
 - [ ] ML-based retention optimization
