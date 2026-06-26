@@ -1,5 +1,5 @@
 import { createWriteStream, createReadStream, promises as fsp } from 'fs';
-import { pipeline } from 'stream';
+import { pipeline } from 'stream/promises';
 import { Readable } from 'stream';
 import path from 'path';
 import { tmpdir } from 'os';
