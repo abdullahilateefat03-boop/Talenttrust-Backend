@@ -143,6 +143,7 @@ For full configuration details, see [docs/backend/config.md](docs/backend/config
 - [SLA/SLO Definitions and Alert Thresholds](docs/backend/SLA_SLO.md)
 - [Redis Testing Guide](docs/backend/redis-testing-guide.md)
 - [Escrow Contract Lifecycle & Bounds](docs/contracts-lifecycle.md)
+- [Contract Event Indexer Cursor Model & Replay Protection](INDEXER.md)
 
 ## CI/CD
 
