@@ -200,6 +200,7 @@ See [docs/backend/SLA_SLO.md](docs/backend/SLA_SLO.md) for full reference.
 - [SLO Runtime Evaluation](#slo-runtime-evaluation)
 - [Redis Testing Guide](docs/backend/redis-testing-guide.md)
 - [Escrow Contract Lifecycle & Bounds](docs/contracts-lifecycle.md)
+- [Contract Event Indexer Cursor Model & Replay Protection](INDEXER.md)
 
 ## CI/CD
 
