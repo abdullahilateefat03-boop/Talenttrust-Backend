@@ -136,6 +136,45 @@ EVENT_TIMEOUT_MS=5000
 
 For full configuration details, see [docs/backend/config.md](docs/backend/config.md).
 
+## Audit Log Export
+
+The audit export endpoint streams compliance exports as NDJSON or CSV without loading the full table into memory.
+
+### Endpoint
+
+```
+GET /api/v1/audit/export
+```
+
+Requires `admin` or `auditor` role. Returns a streamed file attachment.
+
+### Query Parameters
+
+| Parameter    | Type   | Description                                              |
+|--------------|--------|----------------------------------------------------------|
+| `from`       | ISO-8601 | Start of time range (inclusive). e.g. `2024-01-01T00:00:00.000Z` |
+| `to`         | ISO-8601 | End of time range (inclusive).                          |
+| `action`     | string | Filter by event type (e.g. `CONTRACT_CREATED`).          |
+| `severity`   | string | Filter by severity: `INFO`, `WARNING`, or `CRITICAL`.    |
+| `actor`      | string | Filter by actor ID.                                      |
+| `resource`   | string | Filter by resource type (e.g. `contract`, `user`).       |
+| `resourceId` | string | Filter by resource instance ID.                          |
+
+All parameters are optional. Omitting them exports all records.
+
+### Output formats
+
+- **NDJSON** (default) — one JSON object per line, `Content-Type: application/x-ndjson`
+- **CSV** — header row + one data row per entry, columns: `id,timestamp,action,severity,actor,resource,resourceId,ipAddress,correlationId,metadata`
+
+### Memory safety
+
+Rows are fetched via a SQLite cursor and piped to a temp file in configurable batch sizes (default 500). The response is then streamed from the temp file. Peak heap usage is proportional to one batch, not the total result set.
+
+### Redaction
+
+All sensitive metadata fields (`password`, `token`, `secret`, `credential`, `apikey`, `api_key`, `private`) are replaced with `[REDACTED]` and email addresses are partially masked before the data reaches the export file.
+
 ## Documentation
 
 - [Backend Notification Services](./docs/backend/notifications.md)

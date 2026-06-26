@@ -230,10 +230,12 @@ try {
 
   class MockDatabase {
     open: boolean;
+    state: Record<string, any[]>;
     private _pragmaValues: Record<string, any> = {};
 
     constructor(_path: string) {
       this.open = true;
+      this.state = getDbState(_path);
     }
 
     pragma(stmt: string, ..._args: any[]) {
@@ -373,7 +375,6 @@ try {
     transaction(fn: (...args: any[]) => any) {
       return fn;
     }
-    exec(_sql: string) {}
     close() { this.open = false; }
   }
   Database = MockDatabase as any;
