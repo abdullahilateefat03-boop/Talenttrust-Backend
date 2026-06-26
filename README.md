@@ -136,11 +136,68 @@ EVENT_TIMEOUT_MS=5000
 
 For full configuration details, see [docs/backend/config.md](docs/backend/config.md).
 
+## SLO Runtime Evaluation
+
+The backend evaluates Service Level Objectives (SLOs) at runtime by comparing
+live Prometheus metrics against the targets defined in
+`src/operations/service-objectives.ts`.
+
+### How it works
+
+1. **`evaluateObjectives(register, objectives?)`** — reads `http_requests_total`
+   and `http_request_duration_seconds` from the application's prom-client
+   `Registry`, computes aggregate observed values (success rate, p95/p99
+   latency), and produces a compliance report for each objective.
+
+2. **`readObservedMetrics(register)`** — a lightweight read-only function the
+   health/observability layer can call to get a raw metrics snapshot without
+   objective comparisons.
+
+### Compliance report
+
+Each report has the shape:
+
+| Field | Description |
+|---|---|
+| `objectiveKey` | Logical name (e.g. `"healthCheck"`) |
+| `objective` | The full objective definition with targets |
+| `observed` | Observed `successRatePercent`, `latencyP95Ms`, `latencyP99Ms` |
+| `breaches` | Per-dimension boolean (`successRate`, `latencyP95`, `latencyP99`) |
+| `breached` | `true` if any dimension is in breach |
+
+### Edge-case handling
+
+- **Missing metric series** — returns `null` observed values, no breach
+- **Zero observations** — returns `null` latency, no breach
+- **Single observation** — percentiles are skipped (too few), success rate
+  still reports
+- **Exactly-at-threshold** — `>=` / `<=` semantics: meeting the target is
+  *not* a breach
+
+### Usage example
+
+```typescript
+import { evaluateObjectives } from './operations/service-objectives';
+import { metricsService } from './observability/metrics-service';
+
+const reports = await evaluateObjectives(metricsService['register']);
+
+for (const r of reports) {
+  if (r.breached) {
+    console.warn(`SLO breached for ${r.objectiveKey}:`, r.breaches);
+  }
+}
+```
+
+SLO definitions are maintained in `src/operations/service-objectives.ts`.
+See [docs/backend/SLA_SLO.md](docs/backend/SLA_SLO.md) for full reference.
+
 ## Documentation
 
 - [Backend Notification Services](./docs/backend/notifications.md)
 - [Event Ingestion Idempotency](docs/EVENT_INGESTION_IDEMPOTENCY.md)
 - [SLA/SLO Definitions and Alert Thresholds](docs/backend/SLA_SLO.md)
+- [SLO Runtime Evaluation](#slo-runtime-evaluation)
 - [Redis Testing Guide](docs/backend/redis-testing-guide.md)
 - [Escrow Contract Lifecycle & Bounds](docs/contracts-lifecycle.md)
 

@@ -71,6 +71,12 @@ describe('ContractsController', () => {
   // getContracts — happy paths
   // -------------------------------------------------------------------------
 
+  describe('getContracts — success', () => {
+    it('returns 200 with cursor page on first page (no cursor)', async () => {
+      const fakePage = { data: [], nextCursor: null, hasNextPage: false, limit: 20 };
+      mockGetContractsPage.mockResolvedValue(fakePage);
+    });
+
   describe('getContracts', () => {
     it('returns 200 with contracts list', async () => {
       mockGetAllContracts.mockResolvedValue([]);
@@ -225,6 +231,8 @@ describe('ContractsController', () => {
     it('calls next() when service throws', async () => {
       const mockError = new Error('DB Down');
       mockGetContractsPage.mockRejectedValue(mockError);
+      mockRequest.query = {};
+
       await ContractsController.getContracts(
         mockRequest as Request,
         mockResponse as Response,
@@ -244,7 +252,6 @@ describe('ContractsController', () => {
         mockResponse as Response,
         mockNext,
       );
-
 
       expect(mockResponse.status).toHaveBeenCalledWith(200);
       expect(mockResponse.json).toHaveBeenCalledWith({ status: 'success', data: contract });

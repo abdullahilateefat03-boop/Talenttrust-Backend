@@ -117,8 +117,8 @@ const MIGRATIONS: Migration[] = [
     },
   },
   {
-  version: 5,
-  name: "create_transactions_table",
+    version: 5,
+    name: "create_transactions_table",
   checksumSource: [
     "CREATE TABLE IF NOT EXISTS transactions (",
   ].join("\n"),

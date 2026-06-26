@@ -1,6 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
 import { ContractsService } from '../services/contracts.service';
-import { CreateContractDto, UpdateContractDto } from '../modules/contracts/dto/contract.dto';
 import { parseLimit, decodeCursor } from '../contracts/cursor.repository';
 import { CURSOR_DEFAULT_LIMIT } from '../contracts/cursor.types';
 
@@ -42,6 +41,32 @@ export class ContractsController {
    * @param res - Express response.
    * @param next - Express next-error handler.
    */
+
+      const rawCursor = req.query['cursor'];
+      if (rawCursor !== undefined && typeof rawCursor === 'string') {
+        // Validate cursor shape eagerly so we return 400 for garbage values
+        try {
+          decodeCursor(rawCursor);
+        } catch (err) {
+          res.status(400).json({
+            status: 'error',
+            message: (err as Error).message,
+          });
+          return;
+        }
+      }
+
+      const cursor =
+        typeof rawCursor === 'string' && rawCursor.length > 0
+          ? rawCursor
+          : undefined;
+
+      const page = await contractsService.getContractsPage({ limit, cursor });
+      res.status(200).json({ status: 'success', data: page });
+    } catch (error) {
+      next(error);
+    }
+  }
 
   /**
    * @param service - Injected ContractsService instance
@@ -113,7 +138,6 @@ export class ContractsController {
    * POST /api/v1/contracts
    * Create a new contract.
    */
-
   public async createContract(req: Request, res: Response, next: NextFunction) {
     try {
       const data: CreateContractDto = req.body;

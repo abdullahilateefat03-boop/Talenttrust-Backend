@@ -3,6 +3,7 @@ import { Contract } from '../db/types';
 import { ContractRepository } from '../repositories/contractRepository';
 import { SorobanService } from './soroban.service';
 import type { CursorPaginationInput, CursorPage } from '../contracts/cursor.types';
+
 import { validateContractBounds, ContractBoundsError } from '../contracts/bounds';
 import { MAX_MILESTONES_PER_CONTRACT, MAX_CONTRACT_AMOUNT_STROOPS } from '../contracts/bounds';
 import { NotFoundError } from '../errors/appError';
@@ -24,11 +25,6 @@ export class ContractsService {
     this.contractRepository = contractRepository;
   }
 
-  /**
-   * Retrieves all contracts.
-   * @deprecated Prefer {@link getContractsPage} for scalable access.
-   * @returns Array of contract metadata.
-   */
   /**
    * Retrieves all contracts from the repository.
    * @returns Array of contract metadata including version field.
@@ -95,7 +91,13 @@ export class ContractsService {
     return { data: pageItems, nextCursor, hasNextPage, limit };
   }
 
-
+  /**
+   * Creates a new contract off-chain, preparing it for escrow deposit.
+   * Enforces milestone count and total amount caps before persisting.
+   * @param data The contract details conforming to CreateContractDto.
+   * @returns The newly created contract object.
+   * @throws ContractBoundsError if budget or milestone totals exceed policy limits.
+   */
   public async createContract(data: CreateContractDto): Promise<Contract> {
     const boundsCheck = validateContractBounds(data.budget, data.milestones);
     if (!boundsCheck.valid) {

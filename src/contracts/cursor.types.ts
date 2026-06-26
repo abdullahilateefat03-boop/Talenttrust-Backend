@@ -56,6 +56,7 @@ export interface CursorPage<T> {
   hasNextPage: boolean;
   limit: number;
 }
+
 /**
  * @notice Cursor checkpoint for resuming indexing from stable checkpoints.
  * @dev Cursor captures the last successfully indexed event sequence for a contract.
