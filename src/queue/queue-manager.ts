@@ -96,7 +96,7 @@ export class QueueManager {
       },
       {
         connection: queueConfig.redis,
-        concurrency: 5,
+        concurrency: queueConfig.concurrency,
       }
     );
 

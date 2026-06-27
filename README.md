@@ -40,6 +40,35 @@ Detailed architecture and security notes are in `docs/backend/chaos-testing.md`.
 
 Developer onboarding and blue-green local setup are documented in [docs/backend/developer-onboarding-blue-green.md](docs/backend/developer-onboarding-blue-green.md).
 
+## Queue Tuning Configuration
+
+Queue tuning parameters are validated at startup via a typed Zod schema (`src/queue/config.ts`). Invalid values cause an immediate boot-time failure with a descriptive error listing every invalid field — preventing silent runtime degradation.
+
+### Validated environment variables
+
+| Variable | Default | Bounds | Description |
+|---|---|---|---|
+| `REDIS_HOST` | `localhost` | non-empty string | Redis host |
+| `REDIS_PORT` | `6379` | `1–65535` | Redis port |
+| `QUEUE_CONCURRENCY` | `5` | `1–100` | Worker concurrency per queue |
+| `QUEUE_DEFAULT_ATTEMPTS` | `3` | `0–10` | Max job retry attempts |
+| `QUEUE_BACKOFF_DELAY` | `1000` | `1–60000` ms | Base exponential back-off delay |
+| `QUEUE_REMOVE_ON_COMPLETE` | `true` | `true\|false` | Remove completed jobs from Redis |
+| `QUEUE_REMOVE_ON_FAIL` | `false` | `true\|false` | Remove failed jobs from Redis |
+
+### Fail-fast behavior
+
+If any variable fails validation the process exits with:
+
+```
+Queue configuration validation failed:
+Field "QUEUE_CONCURRENCY": QUEUE_CONCURRENCY must be a positive integer
+```
+
+In test environments (`NODE_ENV=test` or `JEST_WORKER_ID` set) validation throws an error instead of calling `process.exit`.
+
+
+
 ## Error Handling and Testing
 
 The backend enforces a consistent API error envelope and status-code policy across request validation, routing, dependency failures, and unexpected runtime errors.
