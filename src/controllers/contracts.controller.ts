@@ -1,7 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { ContractsService } from '../services/contracts.service';
-import { parseLimit, decodeCursor } from '../contracts/cursor.repository';
-import { CURSOR_DEFAULT_LIMIT } from '../contracts/cursor.types';
+import type { CreateContractDto, UpdateContractDto } from '../modules/contracts/dto/contract.dto';
 
 import { CONTRACT_BOUNDS, ContractBoundsError } from '../contracts/bounds';
 import { NotFoundError } from '../errors/appError';
@@ -41,15 +40,6 @@ export class ContractsController {
    * @param res - Express response.
    * @param next - Express next-error handler.
    */
-  public static async getContracts(req: Request, res: Response, next: NextFunction) {
-    try {
-      const limit = parseLimit(req.query['limit'] as string | undefined, CURSOR_DEFAULT_LIMIT);
-      if (limit instanceof Error) {
-        res.status(400).json({ status: 'error', message: limit.message });
-        return;
-      }
-
-
 
   /**
    * @param service - Injected ContractsService instance
@@ -123,23 +113,6 @@ export class ContractsController {
   /**
    * GET /api/v1/contracts/:id
    * Fetch a single contract by ID.
-   */
-  public static async getContractById(req: Request, res: Response, next: NextFunction) {
-    const { ContractRepository } = require('../repositories/contractRepository');
-    const service = new ContractsService(new ContractRepository());
-    try {
-      const contract = await service.getContractById(req.params.id!);
-      if (!contract) {
-        throw new NotFoundError('The requested resource was not found');
-      }
-      ok(res, contract);
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  /**
-   * Instance version of getContractById that uses the injected service.
    */
   public async getContractById(req: Request, res: Response, next: NextFunction) {
     try {
@@ -237,8 +210,6 @@ export class ContractsController {
   }
 }
 
-// Re-export for convenience in tests
-export { CURSOR_DEFAULT_LIMIT };
 /**
  * Factory function that creates a ContractsController with injected service.
  * Use this in route registration to avoid module-level DB side effects.
