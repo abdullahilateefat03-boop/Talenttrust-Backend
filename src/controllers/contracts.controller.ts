@@ -41,6 +41,13 @@ export class ContractsController {
    * @param res - Express response.
    * @param next - Express next-error handler.
    */
+  public static async getContracts(req: Request, res: Response, next: NextFunction) {
+    try {
+      const limit = parseLimit(req.query['limit'] as string | undefined, CURSOR_DEFAULT_LIMIT);
+      if (limit instanceof Error) {
+        res.status(400).json({ status: 'error', message: limit.message });
+        return;
+      }
 
 
 
