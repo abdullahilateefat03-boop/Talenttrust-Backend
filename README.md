@@ -39,6 +39,23 @@ The backend includes dependency-level chaos testing to simulate upstream outages
 Detailed architecture and security notes are in `docs/backend/chaos-testing.md`.
 
 Developer onboarding and blue-green local setup are documented in [docs/backend/developer-onboarding-blue-green.md](docs/backend/developer-onboarding-blue-green.md).
+Detailed authentication design, lifecycle, and refresh-token rotation semantics are documented in [AUTH.md](AUTH.md).
+
+## Soroban RPC Outbound Retries
+
+Outbound RPC queries to the Stellar/Soroban network are wrapped in an automatic retry-with-backoff mechanism to protect against transient network failures.
+
+* **Idempotent Reads**: Queries like `getLedgerEntries`, `getLatestLedger`, `getEvents`, `simulateTransaction`, and the polling check `getTransaction` are wrapped with a jittered exponential back-off helper.
+* **Mutating Transactions**: Submitting signed transactions via `sendTransaction` is **never** retried automatically to prevent accidental double-submission or transaction collisions.
+
+### Configuration
+
+You can configure retry behavior using the following environment variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `SOROBAN_RPC_RETRY_ATTEMPTS` | `5` | Maximum number of retry attempts for read calls. |
+| `SOROBAN_RPC_RETRY_BASE_DELAY_MS` | `200` | The initial base delay in milliseconds, scaled exponentially with jitter. |
 
 ## Error Handling and Testing
 
