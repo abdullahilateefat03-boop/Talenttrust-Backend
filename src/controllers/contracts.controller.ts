@@ -42,6 +42,9 @@ export class ContractsController {
    * @param next - Express next-error handler.
    */
 
+  public async getContractsCursor(req: Request, res: Response, next: NextFunction) {
+    try {
+      const limit = parseLimit(req.query['limit']);
       const rawCursor = req.query['cursor'];
       if (rawCursor !== undefined && typeof rawCursor === 'string') {
         // Validate cursor shape eagerly so we return 400 for garbage values
