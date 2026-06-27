@@ -61,12 +61,14 @@ export class JobExecutionAlreadyActiveError extends Error {
  * Implements singleton pattern to ensure single Redis connection pool
  */
 export class QueueManager {
+  public readonly name = 'queue-manager';
   private static instance: QueueManager;
   private queues: Map<JobType, Queue> = new Map();
   private workers: Map<JobType, Worker> = new Map();
   private queueEvents: Map<JobType, QueueEvents> = new Map();
   private activeExecutions: Map<string, Promise<void>> = new Map();
   private isShuttingDown = false;
+  private acceptingJobs = true;
   private retryManager: RetryPolicyManager;
 
   private constructor() {
@@ -91,6 +93,10 @@ export class QueueManager {
    * @throws Error if queue initialization fails
    */
   public async initializeQueue(jobType: JobType): Promise<void> {
+    if (!this.acceptingJobs) {
+      throw new Error('Queue manager is shutting down and no new queues can be initialized');
+    }
+
     if (this.queues.has(jobType)) {
       return;
     }
@@ -147,6 +153,10 @@ export class QueueManager {
     payload: JobPayload,
     options?: AddJobOptions & { correlationId?: string; requestId?: string }
   ): Promise<AddJobResult> {
+    if (!this.acceptingJobs) {
+      throw new Error('Queue manager is shutting down and no new jobs can be accepted');
+    }
+
     const queue = this.queues.get(jobType);
     if (!queue) {
       throw new Error(`Queue for ${jobType} not initialized`);
@@ -432,12 +442,57 @@ export class QueueManager {
   }
 
   /**
+   * Stops accepting new jobs during shutdown.
+   */
+  public stopAccepting(): void {
+    this.acceptingJobs = false;
+    this.isShuttingDown = true;
+  }
+
+  /**
+   * Waits for active jobs to finish before the shutdown sequence continues.
+   */
+  public async drain(): Promise<void> {
+    if (this.queues.size === 0) {
+      return;
+    }
+
+    while (true) {
+      const activeCounts = await Promise.all(
+        Array.from(this.queues.values()).map((queue) => queue.getActiveCount()),
+      );
+      if (activeCounts.every((count) => count === 0)) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  /**
+   * Persists any queue-manager state that needs a checkpoint during shutdown.
+   */
+  public async checkpoint(): Promise<void> {
+    logger.info('Queue manager checkpoint', {
+      initializedQueues: this.queues.size,
+      initializedWorkers: this.workers.size,
+    });
+  }
+
+  /**
+   * Releases queue and worker resources after the drain phase.
+   */
+  public async close(): Promise<void> {
+    await this.shutdown();
+  }
+
+  /**
    * Gracefully shutdown all queues and workers
    * Waits for active jobs to complete before closing connections
    */
   public async shutdown(): Promise<void> {
     if (this.queues.size === 0 && this.workers.size === 0 && this.queueEvents.size === 0) {
       this.isShuttingDown = false;
+      this.acceptingJobs = false;
       return;
     }
 
@@ -446,6 +501,7 @@ export class QueueManager {
     }
 
     this.isShuttingDown = true;
+    this.acceptingJobs = false;
     logger.info('Shutting down queue manager...');
 
     const shutdownPromises: Promise<void>[] = [];

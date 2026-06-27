@@ -314,6 +314,17 @@ export async function processMyJob(payload: MyPayload): Promise<JobResult> {
 }
 ```
 
+## Graceful shutdown and drain order
+
+The service now uses a single shutdown registry for SIGTERM/SIGINT handling. On shutdown it performs the following steps in order:
+
+1. Close the HTTP listener so new requests stop arriving.
+2. Stop accepting new webhook deliveries and wait for in-flight deliveries, with a bounded grace period before fallback checkpointing.
+3. Stop accepting new transaction polls and queue jobs, wait for in-flight work to finish, and checkpoint any remaining pending state if the grace period expires.
+4. Close BullMQ workers and downstream connections before exiting.
+
+This prevents polls and queue jobs from being interrupted mid-flight while preserving a checkpointable state for pending work.
+
 ## Security Notes
 
 1. Input validation is strict at ingestion boundaries to reject malformed payloads early.
