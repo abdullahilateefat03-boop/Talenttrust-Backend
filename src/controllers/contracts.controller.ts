@@ -41,6 +41,35 @@ export class ContractsController {
    * @param next - Express next-error handler.
    */
 
+  public async getContractsCursor(req: Request, res: Response, next: NextFunction) {
+    try {
+      const limit = parseLimit(req.query['limit']);
+      const rawCursor = req.query['cursor'];
+      if (rawCursor !== undefined && typeof rawCursor === 'string') {
+        // Validate cursor shape eagerly so we return 400 for garbage values
+        try {
+          decodeCursor(rawCursor);
+        } catch (err) {
+          res.status(400).json({
+            status: 'error',
+            message: (err as Error).message,
+          });
+          return;
+        }
+      }
+
+      const cursor =
+        typeof rawCursor === 'string' && rawCursor.length > 0
+          ? rawCursor
+          : undefined;
+
+      const page = await contractsService.getContractsPage({ limit, cursor });
+      res.status(200).json({ status: 'success', data: page });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   /**
    * @param service - Injected ContractsService instance
    */
