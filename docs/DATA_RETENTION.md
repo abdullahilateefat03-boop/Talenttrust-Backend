@@ -54,6 +54,11 @@ Maintains an immutable audit trail of all retention-related operations for compl
 - `queryLogs()` - Search audit logs with filters
 - `getComplianceReport()` - Generate compliance summary
 
+### Relationship with Event Idempotency TTL
+The `DataRetentionManager` operates independently from the **Event Idempotency TTL** mechanism (`src/events/idempotency.ts`). While the Data Retention module enforces long-term storage and compliance logic (e.g. archiving old contracts after years), the idempotency store employs short-lived TTLs (e.g. 24 hours) for deduplication tracking.
+- The Idempotency TTL only governs the lifespan of duplicate event detection and its corresponding metrics (`event_idempotency_evictions_total`). 
+- **No Conflict**: The idempotency key eviction logic does not race against or conflict with the `purge.ts` engine, as idempotency entries are maintained in their own discrete store/table distinct from the local active data and cold storage archives.
+
 ## Usage Examples
 
 ### Initialize Data Retention Manager
