@@ -224,6 +224,7 @@ All sensitive metadata fields (`password`, `token`, `secret`, `credential`, `api
 - [Redis Testing Guide](docs/backend/redis-testing-guide.md)
 - [Escrow Contract Lifecycle & Bounds](docs/contracts-lifecycle.md)
 - [Contract Event Indexer Cursor Model & Replay Protection](INDEXER.md)
+- [Data Retention, Archival, and Purge Lifecycle](docs/DATA_RETENTION.md)
 
 ## CI/CD
 
