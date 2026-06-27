@@ -58,14 +58,12 @@ To guarantee non-repudiation and regulatory accountability, the `ComplianceAudit
 
 The following Mermaid diagram outlines the progression from an active state to eventual deletion, emphasizing the compliance audit tracking checkpoint.
 
-```mermaid
-sequenceDiagram
-    participant Active as Active Storage (Local)
-    participant Policy as Policy Engine
-    participant Archival as Archival Service
-    participant Audit as Compliance Audit Logger
-    participant ArchiveStore as Cold/Encrypted Storage
-    participant Purge as Purge Engine
+### Relationship with Event Idempotency TTL
+The `DataRetentionManager` operates independently from the **Event Idempotency TTL** mechanism (`src/events/idempotency.ts`). While the Data Retention module enforces long-term storage and compliance logic (e.g. archiving old contracts after years), the idempotency store employs short-lived TTLs (e.g. 24 hours) for deduplication tracking.
+- The Idempotency TTL only governs the lifespan of duplicate event detection and its corresponding metrics (`event_idempotency_evictions_total`). 
+- **No Conflict**: The idempotency key eviction logic does not race against or conflict with the `purge.ts` engine, as idempotency entries are maintained in their own discrete store/table distinct from the local active data and cold storage archives.
+
+## Usage Examples
 
     Active->>Policy: Check Expiration (now >= expiresAt)
     Policy-->>Archival: Trigger Archive (if expired)

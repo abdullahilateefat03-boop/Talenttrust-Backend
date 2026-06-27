@@ -233,7 +233,6 @@ try {
   class MockDatabase {
     open: boolean;
     private _pragmaValues: Record<string, any> = {};
-    private _state: Record<string, any[]>;
 
     constructor(_path: string) {
       this.open = true;

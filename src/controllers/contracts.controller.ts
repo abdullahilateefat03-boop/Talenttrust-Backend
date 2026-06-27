@@ -63,7 +63,7 @@ export class ContractsController {
           ? rawCursor
           : undefined;
 
-      const page = await contractsService.getContractsPage({ limit, cursor });
+      const page = await this.service.getContractsPage({ limit, cursor });
       res.status(200).json({ status: 'success', data: page });
     } catch (error) {
       next(error);
