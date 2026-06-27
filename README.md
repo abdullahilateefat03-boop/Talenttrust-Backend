@@ -159,6 +159,21 @@ EVENT_TIMEOUT_MS=5000
 IDEMPOTENCY_TTL_MS=3600000
 ```
 
+### Queue Job Timeouts
+
+Queue workers enforce a wall-clock timeout for every job attempt. When a job exceeds its timeout, the queue manager aborts the processor `AbortSignal`, fails the attempt, and lets the existing retry/DLQ policy decide whether to retry or retain the job as failed.
+
+| Variable | Default | Description |
+|---|---:|---|
+| `QUEUE_JOB_TIMEOUT_MS` | `30000` | Default per-job attempt timeout in milliseconds. |
+| `QUEUE_JOB_TIMEOUT_EMAIL_NOTIFICATION_MS` | `QUEUE_JOB_TIMEOUT_MS` | Timeout override for email notification jobs. |
+| `QUEUE_JOB_TIMEOUT_CONTRACT_PROCESSING_MS` | `QUEUE_JOB_TIMEOUT_MS` | Timeout override for contract processing jobs. |
+| `QUEUE_JOB_TIMEOUT_REPUTATION_UPDATE_MS` | `QUEUE_JOB_TIMEOUT_MS` | Timeout override for reputation update jobs. |
+| `QUEUE_JOB_TIMEOUT_REPUTATION_RECOMPUTE_MS` | `QUEUE_JOB_TIMEOUT_MS` | Timeout override for reputation recompute jobs. |
+| `QUEUE_JOB_TIMEOUT_BLOCKCHAIN_SYNC_MS` | `QUEUE_JOB_TIMEOUT_MS` | Timeout override for blockchain sync jobs. |
+
+Processors receive an `AbortSignal` as optional context and should stop outbound work when it is aborted. The manager still fails the attempt on timeout when a processor ignores the signal, and it prevents the same job from being executed again while the timed-out processor is still active.
+
 For full configuration details, see [docs/backend/config.md](docs/backend/config.md).
 
 ## Audit Log Export

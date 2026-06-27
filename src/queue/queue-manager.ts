@@ -6,7 +6,7 @@
  */
 
 import { Queue, Worker, Job, QueueEvents, JobsOptions } from 'bullmq';
-import { queueConfig } from './config';
+import { getJobTimeoutMs, queueConfig } from './config';
 import {
   JobType,
   JobPayload,
@@ -41,6 +41,21 @@ export interface FailedJobInfo {
   failedAt: number;
   error: string;
 }
+
+export class JobTimeoutError extends Error {
+  constructor(jobType: JobType, jobId: string | undefined, timeoutMs: number) {
+    super(`Job ${jobType}:${jobId ?? 'unknown'} timed out after ${timeoutMs}ms`);
+    this.name = 'JobTimeoutError';
+  }
+}
+
+export class JobExecutionAlreadyActiveError extends Error {
+  constructor(jobType: JobType, jobId: string | undefined) {
+    super(`Job ${jobType}:${jobId ?? 'unknown'} already has an active execution`);
+    this.name = 'JobExecutionAlreadyActiveError';
+  }
+}
+
 /**
  * QueueManager handles queue lifecycle and job processing
  * Implements singleton pattern to ensure single Redis connection pool
@@ -50,6 +65,7 @@ export class QueueManager {
   private queues: Map<JobType, Queue> = new Map();
   private workers: Map<JobType, Worker> = new Map();
   private queueEvents: Map<JobType, QueueEvents> = new Map();
+  private activeExecutions: Map<string, Promise<void>> = new Map();
   private isShuttingDown = false;
   private retryManager: RetryPolicyManager;
 
@@ -171,6 +187,10 @@ export class QueueManager {
     return `replay:${jobType}:${originalJobId}`;
   }
 
+  private buildExecutionKey(jobType: JobType, job: Job): string {
+    return `${jobType}:${job.id ?? job.name}`;
+  }
+
   private toFailedJobEntry(jobType: JobType, job: Job): FailedJobEntry {
     return {
       jobId: String(job.id),
@@ -277,12 +297,67 @@ export class QueueManager {
       : logger.child({ requestId, jobType });
 
     try {
-      return await processor(job.data);
+      return await this.runProcessorWithTimeout(jobType, job, processor);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       jobLogger.error('Job processing failed', { error: errorMessage });
       throw new Error(`Job processing failed: ${errorMessage}`);
     }
+  }
+
+  private async runProcessorWithTimeout(
+    jobType: JobType,
+    job: Job,
+    processor: (payload: JobPayload, context?: { signal: AbortSignal }) => Promise<JobResult>,
+  ): Promise<JobResult> {
+    const executionKey = this.buildExecutionKey(jobType, job);
+    if (this.activeExecutions.has(executionKey)) {
+      throw new JobExecutionAlreadyActiveError(jobType, job.id);
+    }
+
+    const timeoutMs = getJobTimeoutMs(jobType);
+    const controller = new AbortController();
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+
+    const processorPromise = Promise.resolve().then(() =>
+      processor(job.data as JobPayload, { signal: controller.signal }),
+    );
+
+    const cleanupPromise = processorPromise
+      .then(
+        () => undefined,
+        (error) => {
+          if (timedOut) {
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            logger.warn('Timed-out job processor settled after abort', {
+              jobType,
+              jobId: job.id,
+              error: errorMessage,
+            });
+          }
+        },
+      )
+      .finally(() => {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+        if (this.activeExecutions.get(executionKey) === cleanupPromise) {
+          this.activeExecutions.delete(executionKey);
+        }
+      });
+
+    this.activeExecutions.set(executionKey, cleanupPromise);
+
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+      timeoutId = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+        reject(new JobTimeoutError(jobType, job.id, timeoutMs));
+      }, timeoutMs);
+    });
+
+    return Promise.race([processorPromise, timeoutPromise]);
   }
 
   /**
@@ -392,6 +467,7 @@ export class QueueManager {
     this.workers.clear();
     this.queues.clear();
     this.queueEvents.clear();
+    this.activeExecutions.clear();
     this.isShuttingDown = false;
 
     logger.info('Queue manager shutdown complete');
