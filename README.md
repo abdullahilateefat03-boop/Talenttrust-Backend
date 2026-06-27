@@ -518,6 +518,12 @@ A pipeline for indexing escrow and dispute lifecycle updates from smart contract
 - **Endpoint**: `POST /api/v1/events`
 - **Supported Events**: `escrow:created`, `escrow:completed`, `dispute:initiated`, `dispute:resolved`.
 
+### 4. Request Context Propagation via AsyncLocalStorage
+A request-scoped storage utility backed by Node.js `AsyncLocalStorage` to automatically propagate `requestId` and `correlationId` context fields down the async execution tree.
+- **Middleware**: The `requestContext` middleware seeds the store with `requestId` and optional `correlationId` parsed from HTTP headers (`X-Request-Id` and `X-Correlation-Id`).
+- **Observability**: The global `Logger` automatically reads from this store when logging, ensuring logs emitted by downstream services, repository queries, and operations carry the correct correlation context without manual parameter passing.
+- **Safety**: Safe defaults (no IDs) are provided when running outside of a request context (e.g. background tasks or scheduled jobs), and request contexts are concurrently isolated to prevent cross-request context leakage.
+
 ## Testing
 
 Run unit and integration tests to verify these features:
